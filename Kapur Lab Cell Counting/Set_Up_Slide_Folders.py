@@ -87,6 +87,7 @@
 #@ String  (label="Raw files (.nd2 / .ims)", choices={"Leave them in the slide folder", "Link them into nd2/ (no extra disk space)", "Copy them into nd2/ (uses as much space again)"}, style="listBox") fileMode
 #@ String  (label="Raw file type", choices={".nd2", ".ims", ".nd2 and .ims"}, style="radioButtonHorizontal") rawType
 #@ String  (label="Only folders whose name starts with (blank = every slide folder)", value="", required=false) namePrefix
+#@ File    (label="Raw data top folder (the tree with the .nd2/.ims files; its slide folders are mirrored here; blank = none)", style="directory", required=false) rawRoot
 
 # =========================================================================
 # ===  USER CONFIGURATION  ================================================
@@ -212,6 +213,8 @@ def write_run_record(out_dir, script_name, script_version, items):
 # ---- SHARED: user_checks -- keep identical ----
 def confirm_settings(script_name, lines, enabled):
 	"""Run / Cancel window; True = go ahead. "!" lines: warnings, logged."""
+	if globals().get("_UNATTENDED"):         # Run Stages for an Animal
+		return _UNATTENDED.check(script_name, lines)
 	from ij import IJ
 	warn = ["WARNING: " + ln[1:].strip() for ln in lines if ln.startswith("!")]
 	info = [ln for ln in lines if not ln.startswith("!")]
@@ -248,6 +251,30 @@ def confirm_settings(script_name, lines, enabled):
 	gd.showDialog()
 	return not gd.wasCanceled()
 # ---- END SHARED: user_checks ----
+
+
+# ---- SHARED: raw_tree -- keep identical ----
+# The .nd2 / .ims files may sit in another tree that mirrors the slide
+# folders (the same day / treatment / animal / slide folders, another top).
+def layout_raw(slide, raw_root, strict=True):
+	"""The slide's folder in the raw tree: the longest end of the slide's
+	path found below raw_root, or raw_root itself when it is named like the
+	slide. strict: the folder above must have the same name too, so another
+	animal's slide folder of the same name is never taken. None if not found."""
+	import os
+	if not raw_root:
+		return None
+	low = lambda p: [x.lower() for x in os.path.normpath(p).replace("\\", "/").split("/") if x]
+	parts = [p for p in os.path.normpath(slide).replace("\\", "/").split("/") if p]
+	end = low(slide)[-2:]
+	for k in range(1, len(parts)):
+		cand = os.path.join(raw_root, *parts[k:])
+		if os.path.isdir(cand) and (not strict or low(cand)[-2:] == end):
+			return cand
+	if low(raw_root)[-1:] == end[-1:] and (not strict or low(raw_root)[-2:] == end):
+		return raw_root
+	return None
+# ---- END SHARED: raw_tree ----
 
 
 # ---- SHARED: experiment_layout -- keep identical ----
@@ -706,6 +733,25 @@ def main():
 
 	strays = []
 	slides, skipped = find_slides(root, prefix, listed, suffix, strays)
+	# Raw files in their own tree: each of its folders holding raw files is a
+	# slide, mirrored here (made when it is missing).
+	raw_root = globals().get("rawRoot") and rawRoot.getAbsolutePath()
+	raw_base, mirrored = raw_root and (layout_raw(root, raw_root, False) or raw_root), []
+	have = set([os.path.normcase(os.path.normpath(s_)) for s_, _w in slides])
+	for cur, dirs, files in (raw_base and os.walk(raw_base) or []):
+		dirs[:] = sorted([d for d in dirs if not d.startswith(".")])
+		if not [f for f in files if os.path.splitext(f)[1].lower() in RAW_EXTENSIONS]:
+			continue
+		dirs[:] = []            # a slide folder: not searched further
+		rel = os.path.relpath(cur, raw_base)
+		dst = os.path.normpath(rel == "." and root or os.path.join(root, rel))
+		if os.path.normcase(dst) in have or not name_ok(os.path.basename(dst), prefix):
+			continue
+		have.add(os.path.normcase(dst))
+		slides.append((dst, ["raw files in %s" % cur]))
+		if not os.path.isdir(dst):
+			mirrored.append(dst)
+	slides.sort()
 	if not slides:
 		msg = ("No slide folders found under:\n%s\n\nA slide folder holds %s "
 		       "files (directly or in nd2/ or ims/), or already holds one of "
@@ -733,7 +779,8 @@ def main():
 	clashes = [(p, c) for p in plans for c in p["clashes"]]
 	n_raw = sum([len(p["raws"]) for p in plans if p["raw_dir"]])
 
-	lines = ["Dataset folder: %s" % root,
+	lines = ["Dataset folder: %s" % root] + (raw_root and [
+	         "Raw data top folder: %s (matching this folder: %s)" % (raw_root, raw_base)] or []) + [
 	         "Slide folders found: %d%s" % (len(plans),
 	             (" (name starts with '%s')" % prefix) if prefix else ""),
 	         "Region folder in each: '%s'  (new in %d, already there in %d%s)"
@@ -744,7 +791,7 @@ def main():
 	         "Directly in the slide folder: %s" % ", ".join([n + "/" for n in outside]),
 	         "Existing subfolders in the wrong place: %s (%d move(s) planned)"
 	         % (moveMode, n_moves),
-	         "Raw files: %s (%s)" % (fileMode, RAW_TEXT)
+	         "Raw files: %s (%s)" % (raw_root and "left in the raw tree" or fileMode, RAW_TEXT)
 	         + ("; %d file(s) into %s/" % (n_raw, RAW_SUBFOLDER) if n_raw else ""),
 	         "",
 	         "PREVIEW: %d slide folder(s) after the run (most moves / clashes first)" % min(PREVIEW_SLIDES, len(plans))]
@@ -778,6 +825,10 @@ def main():
 		             % (len(left), short(left[0]["slide"], root),
 		                ", ".join([n + "/" for n in left[0]["left_in_slide"]]),
 		                mbf_name, region, mbf_name))
+	if mirrored:
+		lines.append("%d slide folder(s) of the raw tree are not here yet and will be "
+		             "made: %s%s" % (len(mirrored), ", ".join([short(f, root) for f in
+		             mirrored[:6]]), " ..." if len(mirrored) > 6 else ""))
 	empties = [s for s, w in slides if w and w[0].startswith("empty slide folder")]
 	if empties:
 		lines.append("%d empty slide folder(s) (no images yet) are set up too: %s%s"
@@ -904,6 +955,8 @@ def main():
 		         ("Existing subfolders in the wrong place", moveMode),
 		         ("Raw files (.nd2 / .ims)", fileMode),
 		         ("Raw file type", rawType),
+		         ("Raw data top folder (the tree with the .nd2/.ims files; its slide folders are mirrored here; blank = none)",
+		          globals().get("rawRoot") and rawRoot.getAbsolutePath() or "(blank)"),
 		         ("Only folders whose name starts with (blank = every slide folder)", prefix),
 		         ("#Configuration", ""),
 		         ("RAW_FOLDER_NAMES", RAW_FOLDER_NAMES), ("RAW_SUBFOLDER", RAW_SUBFOLDER),

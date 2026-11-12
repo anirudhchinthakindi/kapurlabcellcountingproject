@@ -26,8 +26,9 @@
 #      click inside a counted particle is a hit; one particle takes at most
 #      one click; ties go to the smaller difference in total count).
 #
-# The result is written to tuned_counting_parameters_<region>.txt in the
-# experiment folder (region = the MBF folder's name, also written inside).
+# The result is written to counting_tuning/tuned_counting_parameters_
+# <region>.txt in the experiment folder (region = the MBF folder's name, also
+# written inside), where stage 3 looks for it.
 # Stage 3 uses it by default for that region only, on every slide of the
 # experiment, and warns when "The values below" differ from it. Keep
 # 'Exclude particles on edges' off in stage 3 (the tuning counts particles
@@ -38,13 +39,13 @@
 # you name. Sections without all three are not drawn.
 #
 # Menu  : Plugins > Kapur Lab Cell Counting > Tune Counting Parameters
-# Writes: in <experiment>/counting_tuning_<time>/: the clicks and rectangle
+# Writes: in <experiment>/counting_tuning/<region>_<time>/: the clicks and rectangle
 #         of each section (section_<n>.zip), sections.csv (which section
 #         each code was, added as each section is counted, so a session
 #         cut short can be reused; do not open it while counting, to stay
 #         blind), results.csv (every combination tried, best first;
 #         results_<time>.csv when counts are reused) and a parameter record;
-#         and <experiment>/tuned_counting_parameters_<region>.txt.
+#         and <experiment>/counting_tuning/tuned_counting_parameters_<region>.txt.
 #
 # Usage: Plugins > Kapur Lab Cell Counting > Tune Counting Parameters, or
 # open this file in the Script Editor (File > New > Script..., or Plugins >
@@ -82,6 +83,7 @@ MAX_CIRCULARITY = 1.0
 # ---- FILES ----
 LAYOUT_CSV = "experiment_layout.csv"
 TUNED_FILE = "tuned_counting_parameters.txt"
+TUNING_FOLDER = "counting_tuning"   # in the experiment folder: results and sessions
 BGSUB_FOLDER = "processed_bgsub_cleared"
 PROB_FOLDER = "probabilities"
 ROI_FOLDER = "rois"
@@ -479,6 +481,8 @@ def write_run_record(out_dir, script_name, script_version, items):
 # ---- SHARED: user_checks -- keep identical ----
 def confirm_settings(script_name, lines, enabled):
 	"""Run / Cancel window; True = go ahead. "!" lines: warnings, logged."""
+	if globals().get("_UNATTENDED"):         # Run Stages for an Animal
+		return _UNATTENDED.check(script_name, lines)
 	from ij import IJ
 	warn = ["WARNING: " + ln[1:].strip() for ln in lines if ln.startswith("!")]
 	info = [ln for ln in lines if not ln.startswith("!")]
@@ -585,6 +589,8 @@ def layout_pick_region(slide, typed):
 	import os
 	from ij import Prefs
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.pick_region(slide, typed)
 	regions = layout_regions(slide)
 	typed = (typed or "").strip()
 	hits = typed and layout_match_region(regions, typed) or []
@@ -644,6 +650,8 @@ def layout_confirm(title, slide, region, fields):
 	import os
 	from ij import IJ
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.confirm(title, slide, region, fields)
 	pick_one = "(choose one)"
 	vals = [f[2] or "" for f in fields]
 	for _try in range(3):
@@ -1282,9 +1290,10 @@ def main():
 			return
 		n = max(minSections, int(round(len(pool) * sharePercent / 100.0)))
 		n = min(n, len(pool))
-		tdir = os.path.join(root, "counting_tuning_%s" % stamp)
 		groups = sorted(set([p[0] for p in pool]))
 		regs = sorted(set([p[6] for p in pool]))
+		tdir = os.path.join(root, TUNING_FOLDER, "%s_%s" % (re.sub(r"[^A-Za-z0-9]+", "_", len(
+		    regs) == 1 and regs[0] or "").strip("_") or "tuning", stamp))
 		lines = ["Experiment: %s" % root,
 		         "Sections available: %d in %d group(s) (%s)" % (len(pool), len(groups),
 		                                                          ", ".join(levels)),
@@ -1327,10 +1336,13 @@ def main():
 	tname = tuned_name(region)
 	lines.append("Region: %s; result: %s (stage 3 uses it for this region only)"
 	             % (region or "(none: protocol layout)", tname))
-	if os.path.isfile(os.path.join(root, tname)):
-		lines.append("! %s already exists; it will be replaced (the old one is "
+	if os.path.isfile(os.path.join(root, TUNING_FOLDER, tname)):
+		lines.append("! %s/%s already exists; it will be replaced (the old one is "
 		             "kept as %s_previous_<time>.txt), and stage 3 then uses the "
-		             "new values." % (tname, tname[:-4]))
+		             "new values." % (TUNING_FOLDER, tname, tname[:-4]))
+	elif os.path.isfile(os.path.join(root, tname)):
+		lines.append("! An older %s is in the experiment folder itself; stage 3 uses the "
+		             "new one in %s/ from now on." % (tname, TUNING_FOLDER))
 	if not confirm_settings(SCRIPT_NAME, lines, CONFIRM_BEFORE_RUN):
 		IJ.log("%s: cancelled at the settings check; nothing was processed." % SCRIPT_NAME)
 		return
@@ -1338,7 +1350,7 @@ def main():
 	Prefs.blackBackground = True
 	try:
 		if reuseDir is None:
-			os.makedirs(tdir)
+			os.makedirs(tdir)                # also makes counting_tuning/
 			sec_csv = os.path.join(tdir, "sections.csv")
 			fh = open(sec_csv, "wb")
 			fh.write("code,group,key,bgsub,probability,rois,rect_x,rect_y,rect_size,"
@@ -1455,9 +1467,11 @@ def main():
 			fh.write("%.4f,%d,%s,%s,%s,%.2f,%d,%d,%d,%d,%d\n"
 			         % (r[0], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], manual_total))
 		fh.close()
-		tuned = os.path.join(root, tname)
+		tuned = os.path.join(root, TUNING_FOLDER, tname)
+		if not os.path.isdir(os.path.dirname(tuned)):
+			os.makedirs(os.path.dirname(tuned))
 		if os.path.isfile(tuned):
-			keep = os.path.join(root, "%s_previous_%s.txt" % (tname[:-4], stamp))
+			keep = os.path.join(root, TUNING_FOLDER, "%s_previous_%s.txt" % (tname[:-4], stamp))
 			os.rename(tuned, keep)
 			IJ.log("  the previous tuned values are kept as %s" % keep)
 		fh = open(tuned, "w")

@@ -57,6 +57,7 @@
 
 #@ File    (label="Slide folder (the scripts find its subfolders)", style="directory") slideDir
 #@ String  (label="Region (its MBF folder; blank = choose from a list)", value="", required=false) regionName
+#@ File    (label="Raw data top folder (the tree with the .nd2/.ims files that mirrors the slide folders; blank = in the slide folder)", style="directory", required=false) rawRoot
 #@ String  (label="Only use images whose name contains (blank = all; e.g. _C2)", value="", required=false) nameFilter
 #@ String  (label="Start at section (blank = first; e.g. Region0005)", value="", required=false) startAt
 
@@ -475,6 +476,8 @@ def write_run_record(out_dir, script_name, script_version, items):
 # ---- SHARED: user_checks -- keep identical ----
 def confirm_settings(script_name, lines, enabled):
 	"""Run / Cancel window; True = go ahead. "!" lines: warnings, logged."""
+	if globals().get("_UNATTENDED"):         # Run Stages for an Animal
+		return _UNATTENDED.check(script_name, lines)
 	from ij import IJ
 	warn = ["WARNING: " + ln[1:].strip() for ln in lines if ln.startswith("!")]
 	info = [ln for ln in lines if not ln.startswith("!")]
@@ -728,11 +731,10 @@ def open_review_image(img_path):
 def remove_old_review():
 	"""Offer to delete the 2a Review scripts this one replaced (left behind
 	when the new folder was copied over the old one)."""
-	base = os.path.join(IJ.getDirectory("imagej") or "", "scripts", "Plugins",
-	                    "Kapur_Lab_Cell_Counting")
-	old = [p for p in (os.path.join(base, "Batch", "2a_Review_and_Edit_ROIs.py"),
-	                   os.path.join(base, "Single_image", "2a_Review_and_Edit_ROIs_(single).py"))
-	       if os.path.isfile(p)]
+	import glob
+	base = os.path.join(IJ.getDirectory("imagej") or "", "scripts", "Plugins", "*")
+	old = sorted(glob.glob(os.path.join(base, "Batch", "2a_Review_and_Edit_ROIs.py")) +
+	             glob.glob(os.path.join(base, "Single*", "2a_Review_and_Edit_ROIs_(single).py")))
 	if not old:
 		return
 	gd = GenericDialog(SCRIPT_NAME + " - old version")
@@ -1062,6 +1064,8 @@ def layout_pick_region(slide, typed):
 	import os
 	from ij import Prefs
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.pick_region(slide, typed)
 	regions = layout_regions(slide)
 	typed = (typed or "").strip()
 	hits = typed and layout_match_region(regions, typed) or []
@@ -1121,6 +1125,8 @@ def layout_confirm(title, slide, region, fields):
 	import os
 	from ij import IJ
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.confirm(title, slide, region, fields)
 	pick_one = "(choose one)"
 	vals = [f[2] or "" for f in fields]
 	for _try in range(3):
@@ -1249,6 +1255,30 @@ def experiment_lines(folder):
 # ---- END SHARED: experiment_layout ----
 
 
+# ---- SHARED: raw_tree -- keep identical ----
+# The .nd2 / .ims files may sit in another tree that mirrors the slide
+# folders (the same day / treatment / animal / slide folders, another top).
+def layout_raw(slide, raw_root, strict=True):
+	"""The slide's folder in the raw tree: the longest end of the slide's
+	path found below raw_root, or raw_root itself when it is named like the
+	slide. strict: the folder above must have the same name too, so another
+	animal's slide folder of the same name is never taken. None if not found."""
+	import os
+	if not raw_root:
+		return None
+	low = lambda p: [x.lower() for x in os.path.normpath(p).replace("\\", "/").split("/") if x]
+	parts = [p for p in os.path.normpath(slide).replace("\\", "/").split("/") if p]
+	end = low(slide)[-2:]
+	for k in range(1, len(parts)):
+		cand = os.path.join(raw_root, *parts[k:])
+		if os.path.isdir(cand) and (not strict or low(cand)[-2:] == end):
+			return cand
+	if low(raw_root)[-1:] == end[-1:] and (not strict or low(raw_root)[-2:] == end):
+		return raw_root
+	return None
+# ---- END SHARED: raw_tree ----
+
+
 # ---- slide folder -> this stage's folders and files ---------------------
 # The dialog asks for the slide folder only; the folders below are found in
 # it (slide_layout block) and shown for checking before anything runs. When
@@ -1261,6 +1291,9 @@ if globals().get("slideDir") is not None:
 	if _REGION is None:
 		raise SystemExit
 	RAW_DIRS = [layout_find(_SLIDE, _REGION, "nd2"), layout_find(_SLIDE, _REGION, "ims"), _SLIDE]
+	_RAWT = globals().get("rawRoot") and layout_raw(_SLIDE, rawRoot.getAbsolutePath())
+	if _RAWT:      # the raw files in their own tree
+		RAW_DIRS = [os.path.join(_RAWT, "nd2"), os.path.join(_RAWT, "ims"), _RAWT] + RAW_DIRS
 	_got = layout_confirm(SCRIPT_NAME + " - folders", _SLIDE, _REGION, [
 	    ('Folder of raw .tif images (tifs/)', "dir", layout_find(_SLIDE, _REGION, "tifs"), None, True),
 	    ('Folder of ROI .zip files (rois/)', "dir", layout_find(_SLIDE, _REGION, "rois"), None, True),
@@ -1337,7 +1370,8 @@ def main():
 	                ("Folder of raw .tif images (tifs/)", tif_dir),
 	                ("Folder of ROI .zip files (rois/)", roi_folder),
 	                ("Only use images whose name contains (blank = all; e.g. _C2)", filt),
-	                ("Start at section (blank = first; e.g. Region0005)", start)]
+	                ("Start at section (blank = first; e.g. Region0005)", start),
+	                ("Raw data top folder (the tree with the .nd2/.ims files that mirrors the slide folders; blank = in the slide folder)", globals().get("rawRoot") and rawRoot.getAbsolutePath() or "(blank)")]
 	if not confirm_settings(SCRIPT_NAME, experiment_lines(globals().get("_SLIDE") or tif_dir) + lines, CONFIRM_BEFORE_RUN):
 		IJ.log("%s: cancelled at the settings check; nothing was processed." % SCRIPT_NAME)
 		return

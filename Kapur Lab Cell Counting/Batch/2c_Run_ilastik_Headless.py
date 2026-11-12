@@ -1,4 +1,4 @@
-# 2c_Run_ilastik_Headless_(single).py
+# 2c_Run_ilastik_Headless.py
 #
 # Fiji / ImageJ Jython script - Kapur Lab Cell Counting suite, step 2c.
 #
@@ -6,16 +6,16 @@
 # classifier you trained in ilastik to the background-subtracted images of
 # a slide, and writes the probability maps the way stage 3 expects them.
 #
-# Menu  : Plugins > Kapur Lab Cell Counting > Single image > 2c Run ilastik Headless (single)
+# Menu  : Plugins > Kapur Lab Cell Counting > Batch > 2c Run ilastik Headless
 # Reads : the ilastik project (.ilp) you trained and saved (looked for in the
-#         region's MBF folder, then the slide folder); one .tif image from
+#         region's MBF folder, then the slide folder); the .tif images in
 #         processed_bgsub_cleared/.
 # Writes: probabilities/<image name>.tif (ilastik's {nickname}.tif), one per
 #         image, as 8-bit integers with probability 0-1 renormalized to
 #         0-255 (128 = p 0.50), whatever export settings the project was
 #         saved with; ilastik's own messages in probabilities/
 #         _ilastik_log_<time>.txt; and a parameter record
-#         _run_2c_Run_ilastik_Headless_single_<time>.txt in probabilities/.
+#         _run_2c_Run_ilastik_Headless_<time>.txt in probabilities/.
 #
 # Before running it:
 #   1. Train the classifier in ilastik (Pixel Classification) on a few of
@@ -40,20 +40,18 @@
 # ilastik program, the images and the output folder. Press Run to go ahead
 # or Cancel to stop. ilastik can take a minute or more per image; the Log
 # shows its progress. Press Esc to stop ilastik at once: finished maps are
-# kept, and a later run (Overwrite off) does the rest. With "Show the
-# result" ticked, the map opens in Fiji (channel 1 = label 1, the cells).
+# kept, and a later run (Overwrite off) does the rest.
 #
-# Usage: Plugins > Kapur Lab Cell Counting > Single image > 2c Run ilastik
-# Headless (single), or open this file in the Script Editor (File > New
+# Usage: Plugins > Kapur Lab Cell Counting > Batch > 2c Run ilastik
+# Headless, or open this file in the Script Editor (File > New
 # > Script..., or Plugins > Scripting > Script Editor) with Language = Python
 # (Jython) and press Run.
 
 #@ File    (label="Slide folder (the scripts find its subfolders)", style="directory") slideDir
 #@ String  (label="Region (its MBF folder; blank = choose from a list)", value="", required=false) regionName
-#@ String  (label="Section (e.g. Region0011; blank = choose from a list)", value="", required=false) sectionKey
+#@ String  (label="Only use images whose name contains (blank = all)", value="", required=false) nameFilter
 #@ Boolean (label="Overwrite existing probability maps", value=false) overwrite
 #@ File    (label="ilastik program (blank = find it)", style="file", required=false) ilastikExe
-#@ Boolean (label="Show the result (the probability map) when done", value=true) showResult
 
 # =========================================================================
 # ===  USER CONFIGURATION  ================================================
@@ -102,7 +100,7 @@ WRITE_PARAMETER_RECORD = True
 # ===  END OF USER CONFIGURATION  =========================================
 # =========================================================================
 
-SCRIPT_NAME = "2c_Run_ilastik_Headless_single"
+SCRIPT_NAME = "2c_Run_ilastik_Headless"
 SCRIPT_VERSION = "2.0"
 
 import os
@@ -200,6 +198,8 @@ def write_run_record(out_dir, script_name, script_version, items):
 # ---- SHARED: user_checks -- keep identical ----
 def confirm_settings(script_name, lines, enabled):
 	"""Run / Cancel window; True = go ahead. "!" lines: warnings, logged."""
+	if globals().get("_UNATTENDED"):         # Run Stages for an Animal
+		return _UNATTENDED.check(script_name, lines)
 	from ij import IJ
 	warn = ["WARNING: " + ln[1:].strip() for ln in lines if ln.startswith("!")]
 	info = [ln for ln in lines if not ln.startswith("!")]
@@ -306,6 +306,8 @@ def layout_pick_region(slide, typed):
 	import os
 	from ij import Prefs
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.pick_region(slide, typed)
 	regions = layout_regions(slide)
 	typed = (typed or "").strip()
 	hits = typed and layout_match_region(regions, typed) or []
@@ -365,6 +367,8 @@ def layout_confirm(title, slide, region, fields):
 	import os
 	from ij import IJ
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.confirm(title, slide, region, fields)
 	pick_one = "(choose one)"
 	vals = [f[2] or "" for f in fields]
 	for _try in range(3):
@@ -411,73 +415,6 @@ def layout_confirm(title, slide, region, fields):
 		return out
 	return None
 # ---- END SHARED: slide_layout ----
-
-
-# ---- SHARED: slide_files -- keep identical ----
-# Single-image scripts: the files of one section in a folder. Needs the
-# keys block (key_from, KEY_PATTERN, CASE_INSENSITIVE_KEYS).
-def layout_files_for(folder, key, exts):
-	"""Files in folder whose RegionXXXX key is key, sorted."""
-	import os
-	try:
-		names = sorted(os.listdir(folder))
-	except OSError:
-		return []
-	return [os.path.join(folder, n) for n in names if not n.startswith(".")
-	        and os.path.splitext(n)[1].lower() in exts and key_from(n) == key]
-
-
-def layout_keys(folder, exts):
-	"""RegionXXXX keys of the files in folder (as written), sorted."""
-	import os
-	import re
-	out = {}
-	try:
-		names = sorted(os.listdir(folder))
-	except OSError:
-		return []
-	for n in names:
-		if os.path.splitext(n)[1].lower() in exts and key_from(n) is not None:
-			m = re.search(KEY_PATTERN, os.path.splitext(n)[0],
-			              re.IGNORECASE if CASE_INSENSITIVE_KEYS else 0)
-			out.setdefault(key_from(n), m.group(1) if m else key_from(n))
-	return [out[k] for k in sorted(out)]
-
-
-def layout_pick_section(keys, typed):
-	"""The section to use: the typed one, or a choice (None: told why)."""
-	from ij import IJ
-	from ij.gui import GenericDialog
-	typed = (typed or "").strip()
-	if not keys:
-		IJ.error("Section", "No RegionXXXX files were found for this stage.")
-		return None
-	if typed:
-		hits = [k for k in keys if key_from(k) == key_from(typed)]
-		if hits:
-			return hits[0]
-		IJ.error("Section", "'%s' was not found. Sections here: %s"
-		         % (typed, ", ".join(keys[:30])))
-		return None
-	gd = GenericDialog("Choose the section")
-	gd.addChoice("Section", keys, keys[0])
-	gd.showDialog()
-	if gd.wasCanceled():
-		return None
-	return gd.getNextChoice()
-
-
-def layout_default(cands, hints):
-	"""The only candidate, or the only one starting alike with a hint (the
-	section's bgsub image); else "" (the user chooses)."""
-	import os
-	if len(cands) == 1:
-		return cands[0]
-	st = lambda p: os.path.splitext(os.path.basename(p))[0]
-	hit = [c for c in cands if [h for h in hints if st(h).startswith(st(c))
-	                            or st(c).startswith(st(h))]]
-	return hit[0] if len(hit) == 1 else ""
-# ---- END SHARED: slide_files ----
 
 
 # ---- SHARED: experiment_layout -- keep identical ----
@@ -689,8 +626,10 @@ def find_ilastik():
 
 
 def find_projects(slide, region):
+	"""The .ilp files of the region folder, the slide folder and the animal
+	folder above it (one project trained for all of an animal's slides)."""
 	out = []
-	for d in ([region] if region != slide else []) + [slide]:
+	for d in ([region] if region != slide else []) + [slide, os.path.dirname(slide)]:
 		try:
 			out += [os.path.join(d, f) for f in sorted(os.listdir(d))
 			        if f.lower().endswith(".ilp") and not f.startswith(".")]
@@ -950,38 +889,38 @@ def main():
 	if region is None:
 		return
 	project_choices = find_projects(slide, region)
-	in_dir = layout_find(slide, region, INPUT_FOLDER)
-	sec = layout_pick_section(layout_keys(in_dir, tuple(IMAGE_EXTENSIONS)), sectionKey)
-	if sec is None:
-		return
-	cands = layout_files_for(in_dir, key_from(sec), tuple(IMAGE_EXTENSIONS))
-	got = layout_confirm(SCRIPT_NAME + " - " + sec, slide, region, [
-	    ("Background-subtracted image (from processed_bgsub_cleared/)", "choice",
-	     cands[0] if cands else "", cands, True),
+	filt = (nameFilter or "").strip()
+	got = layout_confirm(SCRIPT_NAME + " - folders", slide, region, [
+	    ("Folder of background-subtracted images (processed_bgsub_cleared/)", "dir",
+	     layout_find(slide, region, INPUT_FOLDER), None, True),
 	    ("Output folder for probability maps (probabilities/)", "dir",
 	     layout_find(slide, region, OUTPUT_FOLDER), None, False),
 	    ("ilastik project (.ilp)", "choice", project_choices[0] if project_choices else "",
 	     project_choices, True)])
 	if got is None:
 		return
-	img, out_dir, project = got
+	in_dir, out_dir, project = got
 	out_dir = out_dir or os.path.join(region, OUTPUT_FOLDER)
-	in_dir = os.path.dirname(img)
 	if os.path.normcase(os.path.abspath(out_dir)) == os.path.normcase(os.path.abspath(in_dir)):
 		IJ.error(SCRIPT_NAME, "The output folder is the input folder:\n%s\n\nEach map is named "
 		         "like its input image, so the background-subtracted images would be "
 		         "replaced by probability maps. Choose another output folder (usually "
 		         "probabilities/)." % in_dir)
 		return
-	images = [img]
+	images = [os.path.join(in_dir, f) for f in sorted(os.listdir(in_dir))
+	          if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
+	          and not f.startswith(".") and (not filt or filt in f) and name_allowed(f)]
+	if not images:
+		IJ.error(SCRIPT_NAME, "No .tif images in\n%s%s" % (in_dir,
+		         (" whose name contains '%s'" % filt) if filt else ""))
+		return
 	record_items = [("#Dialog", ""), ("Slide folder (the scripts find its subfolders)", slide),
 	                ("Region (its MBF folder; blank = choose from a list)", region),
-	                ("Section (e.g. Region0011; blank = choose from a list)", sec),
+	                ("Only use images whose name contains (blank = all)", filt),
 	                ("Overwrite existing probability maps", overwrite),
 	                ("ilastik program (blank = find it)",
 	                 ilastikExe.getAbsolutePath() if ilastikExe is not None else "(blank)"),
-	                ("Show the result (the probability map) when done", showResult),
-	                ("image", img), ("output folder", out_dir)]
+	                ("input folder", in_dir), ("output folder", out_dir)]
 	exe = program_in(ilastikExe.getAbsolutePath()) if ilastikExe is not None else find_ilastik()
 	if not exe:
 		IJ.error(SCRIPT_NAME, "ilastik was not found.\n\nFill in 'ilastik program' "
@@ -1008,7 +947,9 @@ def main():
 	bad = [i for i in have if check_output(output_for(i, out_dir))]
 	todo = [i for i in images if overwrite or i not in have or i in bad]
 	skipped = len(images) - len(todo)
-	lines = ["ilastik project: %s" % project,
+	lines = ["ilastik project: %s%s" % (project, os.path.normpath(os.path.dirname(project))
+	         == os.path.normpath(os.path.dirname(slide)) and " (the animal's project, "
+	         "shared by all its slides)" or ""),
 	         "ilastik program: %s" % exe,
 	         "Images: %d in %s%s" % (len(images), in_dir,
 	                                ("; %d already have a probability map and are skipped"
@@ -1041,6 +982,12 @@ def main():
 	if bad and not overwrite:
 		lines.append("%d existing map(s) cannot be read or are not 8-bit (e.g. %s) and "
 		             "are made again." % (len(bad), os.path.basename(output_for(bad[0], out_dir))))
+	stems = [os.path.basename(output_for(i, out_dir)) for i in todo]
+	dup = sorted(set([x for x in stems if stems.count(x) > 1]))
+	if dup:
+		lines.append("! %d map name(s) would be written by two images each (e.g. %s, "
+		             "from a .tif and a .tiff of the same name); the second replaces "
+		             "the first. Keep one of each pair." % (len(dup), dup[0]))
 	odd = [i for i in todo if os.pathsep in i]
 	if odd:
 		lines.append("! %d image path(s) contain '%s' (e.g. %s); ilastik may read it as a "
@@ -1155,13 +1102,6 @@ def main():
 		body += "\nStopped with Esc; run again to do the rest (finished maps are skipped).\n"
 	if rec:
 		body += "\nParameter record:\n%s" % rec
-	shown = output_for(images[0], out_dir)
-	if showResult and os.path.isfile(shown) and not check_output(shown):
-		try:
-			imp, _n = bf_open(shown)
-			imp.show()
-		except StepError, e:
-			IJ.log("  could not show %s: %s" % (os.path.basename(shown), e))
 	IJ.beep()
 	IJ.showMessage(SCRIPT_NAME + (" - with failures" if failed or stopped else ""), body)
 

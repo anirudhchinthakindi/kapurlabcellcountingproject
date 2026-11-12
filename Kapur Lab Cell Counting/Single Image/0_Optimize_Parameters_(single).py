@@ -1,20 +1,22 @@
-# 0_Optimize_Parameters.py
+# 0_Optimize_Parameters_(single).py
 #
 # Fiji / ImageJ Jython script. Sweeps one pipeline parameter across a range
-# of values and shows the results side by side, so you can choose a value.
+# of values on ONE image and shows the results side by side, so you can
+# choose a value. Single-image version of Batch > 0 Optimize Parameters.
 #
-# Menu:   Plugins > Kapur Lab Cell Counting > Batch > 0 Optimize Parameters
-# Reads:  the first N .tif / .tiff images of a folder (optionally only names
-#         containing some text, e.g. _C2): raw images (tifs/) for the rolling
-#         ball radius, ilastik probability images (probabilities/) for the
-#         threshold, probability or thresholded images
-#         (particle_counts/thresholded/) for size and circularity.
-# Writes: into a new folder (default "optimization"):
-#           _run_0_Optimize_Parameters_<timestamp>.txt  (parameter record, every run)
-#         with "Save results to disk" ticked:
+# Menu:   Plugins > Kapur Lab Cell Counting > Single image >
+#         0 Optimize Parameters (single)
+# Reads:  one .tif / .tiff image: raw (tifs/) for the rolling ball radius,
+#         ilastik probability (probabilities/) for the threshold, probability
+#         or thresholded (particle_counts/thresholded/) for size and circularity.
+# Writes: into a new folder (default "optimization") one level above the
+#         folder holding the image (as the batch version), a parameter record
+#         (every run) and, with "Save results to disk" ticked, the results:
 #           <image>_sweep_<param>_montage.tif / _stack.tif
 #           <image>_live_<param>_<value>.tif        (Live preview)
-#         and, if asked for, _sweep_<param>_log.csv (debug log)
+#           _run_0_Optimize_Parameters_single_<timestamp>.txt
+#                                                   (parameter record)
+#           _sweep_<param>_log_<image stem>.csv     (optional debug log)
 #
 # Output: Montage (labelled panels), Stack (scrollable) or Live preview.
 #
@@ -26,21 +28,20 @@
 # threshold maximum 255, rolling ball on the whole image). With a crop,
 # counts are for the crop only; use "Whole image" to compare with stage 3.
 #
-# Usage: Plugins > Kapur Lab Cell Counting > Batch > 0 Optimize Parameters,
-#        or open this file in the Script Editor (File > New > Script..., or
-#        Plugins > Scripting > Script Editor) with Language = Python
-#        (Jython) and press Run.
+# Usage: Plugins > Kapur Lab Cell Counting > Single image >
+#        0 Optimize Parameters (single), or open this file in the Script
+#        Editor (File > New > Script..., or Plugins > Scripting > Script
+#        Editor) with Language = Python (Jython) and press Run.
 
 #@ File    (label="Slide folder (the scripts find its subfolders)", style="directory") slideDir
 #@ String  (label="Region (its MBF folder; blank = choose from a list)", value="", required=false) regionName
-#@ String  (label="Only use images whose name contains (blank = all)", value="", required=false) nameFilter
+#@ String  (label="Section (e.g. Region0011; blank = choose from a list)", value="", required=false) sectionKey
 #@ String  (label="Parameter to sweep", choices={"Background subtraction: rolling ball radius", "Threshold: manual 8-bit value", "Analyze Particles: minimum size", "Analyze Particles: maximum size", "Analyze Particles: minimum circularity", "Analyze Particles: maximum circularity"}, style="listBox") sweepParam
 #@ String  (label="Output", choices={"Montage", "Scrollable stack", "Montage and stack", "Live preview"}, style="listBox") outputMode
-#@ Integer (label="Images to use (first N found)", value=1, min=1, max=6) maxImages
 #@ Integer (label="Channel (probability: 1 = signal; 0 = first/only)", value=1, min=0) channel
 #@ String  (label="Region to show", choices={"Densest area (auto)", "Centre of image", "Whole image"}, style="listBox") cropMode
 #@ Integer (label="   crop size (pixels)", value=512, min=64) cropSize
-#@ File    (label="Output location (blank = one level above the input)", style="directory", required=false) outParentDir
+#@ File    (label="Output location (blank = beside the folder that holds the input file)", style="directory", required=false) outParentDir
 #@ String  (label="Name for the new output folder", value="optimization") outFolderName
 #@ Boolean (label="Save results to disk", value=true) saveResults
 #@ Boolean (label="Overwrite existing output files", value=false) overwrite
@@ -131,22 +132,18 @@ PROBABILITY_MARKER = ""
 SIZE_IN_PIXELS = True
 
 
-# ---- WINDOWS ------------------------------------------------------------
-# Most result windows one run may open (one per image and output). Beyond it
-# results are saved but NOT opened; with saving off, the run stops first.
-MAX_WINDOWS = 8
-
-
 # ---- OUTPUT LOCATION ----------------------------------------------------
-# With "Output location" blank, optimization/ goes one level above the input
-# folder after stepping out of these stage 3 subfolders, so
-# particle_counts/thresholded/ still gives <slide>/optimization/.
+#
+# With "Output location" blank, optimization/ goes one level above the
+# folder holding the image (the slide folder), after stepping out of these
+# stage 3 subfolders: particle_counts/thresholded/ still gives
+# <slide>/optimization/.
 NESTED_INPUT_FOLDERS = ["thresholded", "watershed", "QC", "particle_rois"]
 
 
 # ---- PARAMETER RECORD ---------------------------------------------------
-# Every run writes _run_0_Optimize_Parameters_<timestamp>.txt (all settings),
-# even with "Save results to disk" off.
+# Every run writes _run_0_Optimize_Parameters_single_<timestamp>.txt (all
+# settings), even with "Save results to disk" off.
 WRITE_PARAMETER_RECORD = True
 
 
@@ -154,11 +151,18 @@ WRITE_PARAMETER_RECORD = True
 # Show the "Check settings" window first. False skips it (warnings logged).
 CONFIRM_BEFORE_RUN = True
 
+# ---- SECTION KEYS ----
+# Used to list a slide's sections (RegionXXXX) when the slide folder is given.
+KEY_PATTERN = r"^(Region\d+)"
+CASE_INSENSITIVE_KEYS = True
+REQUIRE_IN_NAME = ""
+EXCLUDE_IN_NAME = ""
+
 # =========================================================================
 # ===  END OF USER CONFIGURATION  =========================================
 # =========================================================================
 
-SCRIPT_NAME = "0_Optimize_Parameters"
+SCRIPT_NAME = "0_Optimize_Parameters_(single)"
 SCRIPT_VERSION = "2.0"
 
 # Upper threshold bound of every sweep; keep stage 3's "Threshold: maximum
@@ -186,6 +190,31 @@ try:
 	HAVE_BIOFORMATS = True
 except ImportError:
 	HAVE_BIOFORMATS = False
+
+# ---- SHARED: keys -- keep identical ----
+# Needs KEY_PATTERN, CASE_INSENSITIVE_KEYS, REQUIRE_IN_NAME and
+# EXCLUDE_IN_NAME from the configuration block.
+def key_from(filename):
+	"""Pairing key = the leading Region token; everything after is ignored."""
+	import os
+	import re
+	stem = os.path.splitext(os.path.basename(filename))[0]
+	m = re.search(KEY_PATTERN, stem, re.IGNORECASE if CASE_INSENSITIVE_KEYS else 0)
+	if not m:
+		return None
+	key = m.group(1)
+	return key.lower() if CASE_INSENSITIVE_KEYS else key
+
+
+def name_allowed(filename):
+	"""Apply the REQUIRE_IN_NAME / EXCLUDE_IN_NAME filename filters."""
+	if REQUIRE_IN_NAME and REQUIRE_IN_NAME not in filename:
+		return False
+	if EXCLUDE_IN_NAME and EXCLUDE_IN_NAME in filename:
+		return False
+	return True
+# ---- END SHARED: keys ----
+
 
 # ---- SHARED: slide_layout -- keep identical ----
 # A stage's folders from ONE slide folder. A region folder: named with the
@@ -255,6 +284,8 @@ def layout_pick_region(slide, typed):
 	import os
 	from ij import Prefs
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.pick_region(slide, typed)
 	regions = layout_regions(slide)
 	typed = (typed or "").strip()
 	hits = typed and layout_match_region(regions, typed) or []
@@ -314,6 +345,8 @@ def layout_confirm(title, slide, region, fields):
 	import os
 	from ij import IJ
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.confirm(title, slide, region, fields)
 	pick_one = "(choose one)"
 	vals = [f[2] or "" for f in fields]
 	for _try in range(3):
@@ -360,6 +393,73 @@ def layout_confirm(title, slide, region, fields):
 		return out
 	return None
 # ---- END SHARED: slide_layout ----
+
+
+# ---- SHARED: slide_files -- keep identical ----
+# Single-image scripts: the files of one section in a folder. Needs the
+# keys block (key_from, KEY_PATTERN, CASE_INSENSITIVE_KEYS).
+def layout_files_for(folder, key, exts):
+	"""Files in folder whose RegionXXXX key is key, sorted."""
+	import os
+	try:
+		names = sorted(os.listdir(folder))
+	except OSError:
+		return []
+	return [os.path.join(folder, n) for n in names if not n.startswith(".")
+	        and os.path.splitext(n)[1].lower() in exts and key_from(n) == key]
+
+
+def layout_keys(folder, exts):
+	"""RegionXXXX keys of the files in folder (as written), sorted."""
+	import os
+	import re
+	out = {}
+	try:
+		names = sorted(os.listdir(folder))
+	except OSError:
+		return []
+	for n in names:
+		if os.path.splitext(n)[1].lower() in exts and key_from(n) is not None:
+			m = re.search(KEY_PATTERN, os.path.splitext(n)[0],
+			              re.IGNORECASE if CASE_INSENSITIVE_KEYS else 0)
+			out.setdefault(key_from(n), m.group(1) if m else key_from(n))
+	return [out[k] for k in sorted(out)]
+
+
+def layout_pick_section(keys, typed):
+	"""The section to use: the typed one, or a choice (None: told why)."""
+	from ij import IJ
+	from ij.gui import GenericDialog
+	typed = (typed or "").strip()
+	if not keys:
+		IJ.error("Section", "No RegionXXXX files were found for this stage.")
+		return None
+	if typed:
+		hits = [k for k in keys if key_from(k) == key_from(typed)]
+		if hits:
+			return hits[0]
+		IJ.error("Section", "'%s' was not found. Sections here: %s"
+		         % (typed, ", ".join(keys[:30])))
+		return None
+	gd = GenericDialog("Choose the section")
+	gd.addChoice("Section", keys, keys[0])
+	gd.showDialog()
+	if gd.wasCanceled():
+		return None
+	return gd.getNextChoice()
+
+
+def layout_default(cands, hints):
+	"""The only candidate, or the only one starting alike with a hint (the
+	section's bgsub image); else "" (the user chooses)."""
+	import os
+	if len(cands) == 1:
+		return cands[0]
+	st = lambda p: os.path.splitext(os.path.basename(p))[0]
+	hit = [c for c in cands if [h for h in hints if st(h).startswith(st(c))
+	                            or st(c).startswith(st(h))]]
+	return hit[0] if len(hit) == 1 else ""
+# ---- END SHARED: slide_files ----
 
 
 # ---- SHARED: experiment_layout -- keep identical ----
@@ -454,16 +554,23 @@ if globals().get("slideDir") is not None:
 	if _REGION is None:
 		raise SystemExit
 	_sub = "tifs" if sweepParam.startswith("Background") else "probabilities"
-	_got = layout_confirm(SCRIPT_NAME + " - folders", _SLIDE, _REGION, [
-	    ("Folder of images to optimise on (tifs/ or probabilities/)", "dir",
-	     layout_find(_SLIDE, _REGION, _sub), None, True)])
+	_KEYS = layout_keys(layout_find(_SLIDE, _REGION, _sub), ('.tif', '.tiff'))
+	_SEC = layout_pick_section(_KEYS, sectionKey)
+	if _SEC is None:
+		raise SystemExit
+	_K = key_from(_SEC)
+	_HINTS = layout_files_for(layout_find(_SLIDE, _REGION, "processed_bgsub_cleared"), _K, (".tif", ".tiff"))
+	_c_inputFile = layout_files_for(layout_find(_SLIDE, _REGION, _sub), _K, ('.tif', '.tiff'))
+	_got = layout_confirm(SCRIPT_NAME + " - " + _SEC, _SLIDE, _REGION, [
+	    ('Image to optimise on (from tifs/ or probabilities/)', "choice", layout_default(_c_inputFile, _HINTS), _c_inputFile, True),
+	])
 	if _got is None:
 		raise SystemExit
-	inputDir = _F(_got[0])
+	inputFile = _F(_got[0]) if _got[0] else None
 
 
-IN_DIR = inputDir.getAbsolutePath()
-NAME_FILTER = (nameFilter or "").strip()
+IN_FILE = inputFile.getAbsolutePath()
+IN_DIR = os.path.dirname(IN_FILE)
 
 PARAM_KEYS = {
     "Background subtraction: rolling ball radius": "rolling",
@@ -651,6 +758,8 @@ def write_run_record(out_dir, script_name, script_version, items):
 # ---- SHARED: user_checks -- keep identical ----
 def confirm_settings(script_name, lines, enabled):
 	"""Run / Cancel window; True = go ahead. "!" lines: warnings, logged."""
+	if globals().get("_UNATTENDED"):         # Run Stages for an Animal
+		return _UNATTENDED.check(script_name, lines)
 	from ij import IJ
 	warn = ["WARNING: " + ln[1:].strip() for ln in lines if ln.startswith("!")]
 	info = [ln for ln in lines if not ln.startswith("!")]
@@ -788,11 +897,19 @@ if not HAVE_BIOFORMATS:
 	         "('Bio-Formats'), then restart Fiji.")
 	raise SystemExit
 
-if not os.path.isdir(IN_DIR):
-	IJ.error("Input folder",
-	         "The input folder does not exist:\n%s\n\n"
-	         "Choose the folder that holds the images (tifs/ for the rolling "
-	         "ball radius, probabilities/ for everything else)." % IN_DIR)
+if not os.path.isfile(IN_FILE):
+	IJ.error("Input image",
+	         "The image file does not exist:\n%s\n\n"
+	         "Choose one image (from tifs/ for the rolling ball radius, from "
+	         "probabilities/ for everything else)." % IN_FILE)
+	raise SystemExit
+
+if os.path.splitext(IN_FILE)[1].lower() not in TIF_EXTENSIONS:
+	IJ.error("Input image",
+	         "This is not a %s file:\n%s\n\n"
+	         "Choose a .tif image (from tifs/ or probabilities/). Convert "
+	         "other formats with 1 Convert to Tif first."
+	         % (" / ".join(TIF_EXTENSIONS), IN_FILE))
 	raise SystemExit
 
 
@@ -992,8 +1109,7 @@ def show_settings_dialog():
 
 	if MODE_LIVE:
 		gd.addMessage("Live preview: move the control and the image follows.\n"
-		              "The first image in the folder (after the name filter)\n"
-		              "is used.")
+		              "The chosen image is used.")
 	else:
 		gd.addMessage("Values to compare. Fill in the list, or leave it blank\n"
 		              "and a range will be generated below.")
@@ -1489,16 +1605,13 @@ def save_output(imp, path, what):
 
 def dialog_items():
 	return [
-	    ("Folder of images to optimise on (tifs/ or probabilities/)", IN_DIR),
-	    ("Only use images whose name contains (blank = all)",
-	     NAME_FILTER or "(blank)"),
+	    ("Image to optimise on (from tifs/ or probabilities/)", IN_FILE),
 	    ("Parameter to sweep", sweepParam),
 	    ("Output", outputMode),
-	    ("Images to use (first N found)", maxImages),
 	    ("Channel (probability: 1 = signal; 0 = first/only)", channel),
 	    ("Region to show", cropMode),
 	    ("crop size (pixels)", cropSize),
-	    ("Output location (blank = one level above the input)",
+	    ("Output location (blank = beside the folder that holds the input file)",
 	     outParentDir.getAbsolutePath() if outParentDir is not None
 	     else "(blank)"),
 	    ("Name for the new output folder", outFolderName),
@@ -1538,7 +1651,6 @@ def record_items(S, values, value_source, images, chosen=None):
 	    "BG_LIGHT_BACKGROUND BG_SLIDING_PARABOLOID BG_DISABLE_SMOOTHING "
 	    "SIZE_IN_PIXELS").split()] + [
 	    ("TIF_EXTENSIONS", ", ".join(TIF_EXTENSIONS)),
-	    ("MAX_WINDOWS", MAX_WINDOWS),
 	    ("NESTED_INPUT_FOLDERS", ", ".join(NESTED_INPUT_FOLDERS)),
 	    ("PROBABILITY_MARKER", PROBABILITY_MARKER or "(blank)")] + [
 	    (n, globals()[n]) for n in (
@@ -1634,60 +1746,13 @@ class LivePreview(DialogListener, AdjustmentListener):
 		self.update(v)
 
 
-def all_tifs():
-	return sorted([f for f in os.listdir(IN_DIR)
-	               if os.path.isfile(os.path.join(IN_DIR, f))
-	               and os.path.splitext(f)[1].lower() in TIF_EXTENSIONS])
-
-
 def list_images():
-	"""Full paths of the images to use (name filter applied), sorted."""
-	files = all_tifs()
-	if not files:
-		raise StepError("no %s files in %s" % (" / ".join(TIF_EXTENSIONS), IN_DIR))
-	if NAME_FILTER:
-		kept = [f for f in files if NAME_FILTER.lower() in f.lower()]
-		if not kept:
-			raise StepError(
-			    "none of the %d image(s) in %s has '%s' in its name (e.g. %s). "
-			    "Fix 'Only use images whose name contains', or leave it blank."
-			    % (len(files), IN_DIR, NAME_FILTER, files[0]))
-		files = kept
-	return [os.path.join(IN_DIR, f) for f in files]
-
-
-def window_plan(n_images):
-	"""(windows this run would open, whether to open them)."""
-	n = n_images * ((1 if MODE_MONTAGE else 0) + (1 if MODE_STACK else 0))
-	return n, n <= MAX_WINDOWS
-
-
-def check_window_limit():
-	"""Stop when too many windows would open and none are saved."""
-	if MODE_LIVE:
-		return
-	try:
-		n_images = len(list_images()[:maxImages])
-	except StepError:
-		return                  # reported when the sweep starts
-	n, can_open = window_plan(n_images)
-	if can_open or saveResults:
-		return
-	IJ.error("Too many result windows",
-	         "This run would open %d result windows (%d image(s) x '%s'), "
-	         "more than MAX_WINDOWS = %d (configuration block), which can "
-	         "freeze Fiji. Above it results are saved, not opened, but 'Save "
-	         "results to disk' is off.\n\nEither tick 'Save results to disk', "
-	         "or use fewer images or one output (at most %d windows)."
-	         % (n, n_images, outputMode, MAX_WINDOWS, MAX_WINDOWS))
-	raise SystemExit
+	return [IN_FILE]
 
 
 # =========================================================================
 # ===  CHECK SETTINGS  ====================================================
 # =========================================================================
-
-REGION_KEY = re.compile(r"^(region\d+)", re.IGNORECASE)
 
 
 def planned_output_dir():
@@ -1830,7 +1895,7 @@ def common_lines(S, values, value_source, paths):
 	return lines
 
 
-def output_lines(paths, n_windows, open_windows):
+def output_lines(paths, n_windows):
 	lines = []
 	if cropMode.startswith("Whole"):
 		lines.append("Region shown: whole image")
@@ -1849,13 +1914,8 @@ def output_lines(paths, n_windows, open_windows):
 		names = ["%s_live_%s_<value>.tif" % (stem, PKEY)]
 	else:
 		kinds = (["montage"] if MODE_MONTAGE else []) + (["stack"] if MODE_STACK else [])
-		if open_windows:
-			lines.append("Output: %s; %d result window(s) will open"
-			             % (outputMode, max(n_windows, len(kinds))))
-		else:
-			lines.append("Output: %s; %d result windows is more than "
-			             "MAX_WINDOWS = %d, so they are saved but NOT opened"
-			             % (outputMode, n_windows, MAX_WINDOWS))
+		lines.append("Output: %s; %d result window(s) will open"
+		             % (outputMode, max(n_windows, len(kinds))))
 		names = []
 		for p in paths:
 			s = os.path.splitext(os.path.basename(p))[0]
@@ -1884,44 +1944,12 @@ def output_lines(paths, n_windows, open_windows):
 def settings_lines(S):
 	"""The Check settings lines (warnings start with "!")."""
 	values, value_source = (None, None) if MODE_LIVE else build_values(S)
-	found = list_images()
-	paths = found[:1] if MODE_LIVE else found[:maxImages]
-	names = [os.path.basename(p) for p in paths]
-	tifs = all_tifs()
-
+	paths = list_images()
 	lines = common_lines(S, values, value_source, paths)
-	lines.append("Input folder: %s" % IN_DIR)
-	if NAME_FILTER:
-		lines.append("Name filter '%s': %d of the %d .tif file(s) in the "
-		             "folder match" % (NAME_FILTER, len(found), len(tifs)))
-	if MODE_LIVE:
-		lines.append("Image used: %s  (the first of %d)" % (names[0], len(found)))
-	else:
-		if len(found) >= maxImages:
-			lines.append("Images used: %d of %d, the first in name order:"
-			             % (len(paths), len(found)))
-		else:
-			lines.append("Images used: all %d ('Images to use' is %d, but "
-			             "only %d found):" % (len(paths), maxImages, len(found)))
-		lines.append("   " + ", ".join(names))
-
-	if not NAME_FILTER:
-		by_key = {}
-		for m, f in [(REGION_KEY.match(f), f) for f in tifs]:
-			if m:
-				by_key.setdefault(m.group(1).lower(), []).append(f)
-		multi = [by_key[k] for k in sorted(by_key.keys()) if len(by_key[k]) > 1]
-		if multi:
-			lines.append("!The name filter is blank and the folder holds more "
-			             "than one file per region (e.g. %s), so 'first N "
-			             "found' may pick files you did not mean. These will "
-			             "be used: %s. To pick one kind of file, fill in "
-			             "'Only use images whose name contains'."
-			             % (", ".join(multi[0]), ", ".join(names)))
-
+	lines.append("Input image: %s" % IN_FILE)
 	lines.extend(channel_lines(paths[0]))
-	lines.extend(output_lines(*((paths, 1, True) if MODE_LIVE
-	                            else (paths,) + window_plan(len(paths)))))
+	kinds = (1 if MODE_MONTAGE else 0) + (1 if MODE_STACK else 0)
+	lines.extend(output_lines(paths, 1 if MODE_LIVE else kinds))
 	return lines
 
 
@@ -2032,10 +2060,9 @@ def run_live(S):
 def run_batch(S):
 	values, value_source = build_values(S)
 
-	paths = list_images()[:maxImages]
+	paths = list_images()
 	chosen = [os.path.basename(p) for p in paths]
 	stage_warning = stage_warning_for(paths)
-	n_windows, open_windows = window_plan(len(paths))
 
 	# Created even with saving off (parameter record).
 	out_dir = resolve_output_dir(OUT_ANCHOR, outFolderName, "optimization",
@@ -2051,8 +2078,6 @@ def run_batch(S):
 	IJ.log("  values    : %s   (%s)"
 	       % (", ".join([fmt_value(v) for v in values]), value_source))
 	IJ.log("  images    : %s" % ", ".join(chosen))
-	IJ.log("  name filter: %s" % ("'%s'" % NAME_FILTER if NAME_FILTER
-	                               else "none (all images)"))
 	IJ.log("  region    : %s" % cropMode)
 	if STAGE_RAW:
 		IJ.log("  held fixed: nothing - the rolling ball runs before ilastik")
@@ -2075,10 +2100,6 @@ def run_batch(S):
 		IJ.log("  saving to : %s" % out_dir)
 	else:
 		IJ.log("  saving    : off (parameter record only, in %s)" % out_dir)
-	if not open_windows:
-		IJ.log("  ! %d result windows would open (more than MAX_WINDOWS = %d): "
-		       "they are saved but NOT opened, so Fiji does not freeze. Open "
-		       "them from %s." % (n_windows, MAX_WINDOWS, out_dir))
 	IJ.log("=" * 64)
 
 	summary = ResultsTable()
@@ -2132,16 +2153,13 @@ def run_batch(S):
 
 			title = "%s  [%s sweep]" % (stem, PARAM_LABEL)
 			for kind, out_imp in build_outputs(panels, title):
-				if open_windows:
-					out_imp.show()
+				out_imp.show()
 				made.append("%s (%s)" % (stem, kind))
 				if saveResults:
 					mpath = os.path.join(
 					    out_dir, "%s_sweep_%s_%s.tif" % (stem, PKEY, kind))
 					if save_output(out_imp, mpath, kind) is None:
 						not_saved.append(mpath)
-				if not open_windows:
-					close_quietly(out_imp)
 
 			for p in panels:
 				summary.incrementCounter()
@@ -2178,7 +2196,8 @@ def run_batch(S):
 
 	log_path = None
 	if writeLog and out_dir:
-		target = os.path.join(out_dir, "_sweep_%s_log.csv" % PKEY)
+		target = os.path.join(out_dir, "_sweep_%s_log_%s.csv"
+		                      % (PKEY, os.path.splitext(os.path.basename(IN_FILE))[0]))
 		if os.path.exists(target) and not overwrite:
 			not_saved.append(target)
 			IJ.log("Debug log NOT saved - the file already exists (tick "
@@ -2205,8 +2224,7 @@ def run_batch(S):
 
 	return {"values": values, "made": made, "failed": failed,
 	        "warning": stage_warning, "out_dir": out_dir, "log": log_path,
-	        "skip": S["skip"], "not_saved": not_saved, "record": record,
-	        "not_opened": (not open_windows) and n_windows or 0}
+	        "skip": S["skip"], "not_saved": not_saved, "record": record}
 
 
 # =========================================================================
@@ -2267,11 +2285,6 @@ def finish_batch(result):
 		         "usually doing what you want."]
 	if result["warning"]:
 		body += ["", "WARNING: " + result["warning"]]
-	if result["not_opened"]:
-		body += ["", "The %d result windows were NOT opened (more than "
-		         "MAX_WINDOWS = %d would freeze Fiji). They were saved; "
-		         "open them from the folder below."
-		         % (result["not_opened"], MAX_WINDOWS)]
 	if result["out_dir"] and saveResults:
 		body += ["", "Saved to: " + result["out_dir"]]
 	elif result["out_dir"]:
@@ -2295,7 +2308,6 @@ def finish_batch(result):
 _prev_black_background = Prefs.blackBackground
 Prefs.blackBackground = True
 try:
-	check_window_limit()
 	S = show_settings_dialog()
 	if S is None:
 		IJ.log("Cancelled.")

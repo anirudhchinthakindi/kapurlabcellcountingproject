@@ -1,26 +1,28 @@
-# 2a_NeuroInfo_XML_to_ROI_(single).py - Kapur Lab Cell Counting, stage 2a
-# (single image). Converts ONE NeuroInfo contour export (xml/, micrometres)
-# into an ImageJ RoiSet .zip in pixel coordinates in rois/ beside xml/, as
-# the batch version does (same checks, composition and output), plus a
-# parameter record; optionally shows it on its image. The Log lists every
-# ROI with its pixel bounds (a quick Y axis check). Keep the USER
-# CONFIGURATION block identical to the batch version's.
-# Menu: Plugins > Kapur Lab Cell Counting > Single image.
+# 2a_NeuroInfo_XML_to_ROI.py - Kapur Lab Cell Counting, stage 2a (batch).
+# Converts NeuroInfo contour exports (xml/, micrometres) into ImageJ RoiSet
+# .zip files in pixel coordinates (rois/), one per XML, plus a parameter
+# record and, optionally, a summary CSV:  xml/Region0000.xml -> rois/Region0000.zip
+# Per file: 1. check the contour names against EXPECTED_ROIS; 2. compose
+# the ROI set (one ROI per brain region, unify, split by hemisphere, keep,
+# or the rules coded in compose_rois(); chosen in the dialog); 3. check the
+# result against EXPECTED_ROIS_AFTER_MATH and write. A Check settings
+# window comes first (CONFIRM_BEFORE_RUN = False skips it). Edit only the
+# USER CONFIGURATION block. Menu: Plugins > Kapur Lab Cell Counting > Batch.
+# To load a result later: ROI Manager > More >> > Open... > Region0007.zip
 
 #@ File    (label="Slide folder (the scripts find its subfolders)", style="directory") slideDir
 #@ String  (label="Region (its MBF folder; blank = choose from a list)", value="", required=false) regionName
-#@ String  (label="Section (e.g. Region0011; blank = choose from a list)", value="", required=false) sectionKey
-#@ File    (label="Output location (blank = beside the folder that holds the input file)", style="directory", required=false) outParentDir
+#@ File    (label="Output location (blank = one level above the input)", style="directory", required=false) outParentDir
 #@ String  (label="Name for the new output folder", value="rois") outFolderName
+#@ String (label="Filename pattern", value="Region*.xml") filePattern
 #@ String (label="Y axis", choices={"flip (usual)", "no flip"}, style="radioButtonHorizontal") yMode
 #@ String (label="ROI composition", choices={"Separate brain regions - one ROI per region (options below)", "None - keep ROIs as converted", "Unify all ROIs into one", "Unify by hemisphere - left / right / unpaired", "Unify by hemisphere - unpaired added to both", "Use the composition coded in this script"}, style="listBox") compositionMode
 #@ String (label="   regions to count, separated by ; (blank = every outermost region)", value="", required=false) brainRegions
 #@ Boolean(label="   also count each subregion inside them separately", value=false) withSubregions
 #@ String (label="   hemispheres", choices={"Left and right separately", "Left and right together (one ROI)", "Both: left, right and together"}, style="listBox") hemispheres
 #@ String (label="On validation problem", choices={"warn and convert anyway", "skip the file", "stop the whole run"}, style="listBox") validationAction
-#@ Boolean(label="Overwrite the .zip if it already exists", value=false) overwrite
+#@ Boolean(label="Skip files whose .zip already exists", value=false) skipExisting
 #@ Boolean(label="Write a summary CSV to the output folder", value=false) writeLog
-#@ Boolean(label="Show the result (image + ROIs in the ROI Manager)", value=true) showResult
 
 
 # =========================================================================
@@ -142,27 +144,16 @@ REGION_GROUPS = {
 
 
 # ---- 4. PARAMETER RECORD ------------------------------------------------
-# True writes _run_2a_NeuroInfo_XML_to_ROI_single_<date-time>.txt (every
-# setting used) into the output folder. Keep it on.
+#
+# True writes _run_2a_NeuroInfo_XML_to_ROI_<date-time>.txt into the output
+# folder: every dialog value and setting this run used, so the ROI sets
+# can be traced back to how they were made. Keep it on.
 WRITE_PARAMETER_RECORD = True
 
 
 # ---- SAFETY CHECKS ----------------------------------------------------
 # True shows the "Check settings" window before processing.
 CONFIRM_BEFORE_RUN = True
-
-
-# ---- 5. SINGLE IMAGE ONLY -----------------------------------------------
-# The RegionXXXX keys of the XML and the image are compared; a mismatch is
-# reported (the run is not stopped).
-KEY_PATTERN = r"^(Region\d+)"     # the key is the first group of this regex
-CASE_INSENSITIVE_KEYS = True      # Region0001 matches region0001
-# Needed by the shared pairing helpers; leave empty.
-REQUIRE_IN_NAME = ""
-EXCLUDE_IN_NAME = ""
-
-# True clears the ROI Manager before this file's ROIs are added to it.
-CLEAR_ROI_MANAGER_BEFORE_SHOWING = False
 
 
 # ---- 3b. CODED COMPOSITION ----------------------------------------------
@@ -218,11 +209,17 @@ def compose_rois(rois, ctx):
 # =========================================================================
 # Nothing below this line should need editing for routine use.
 
-SCRIPT_NAME = "2a_NeuroInfo_XML_to_ROI_(single)"
+SCRIPT_NAME = "2a_NeuroInfo_XML_to_ROI"
 SCRIPT_VERSION = "2.0"
+
+# Later stages pair a ROI set with its images by the leading RegionXXXX token
+# of the file name (their KEY_PATTERN). Used here only to warn when the XML
+# names do not carry it.
+PAIRING_KEY_PATTERN = r"^(Region\d+)"
 
 import re
 import os
+import fnmatch
 from xml.etree import ElementTree as ET
 from jarray import array
 from collections import OrderedDict
@@ -239,31 +236,6 @@ class StepError(Exception):
 	"""A per-file failure with a message already written for a human."""
 	pass
 # ---- END SHARED: errors ----
-
-
-# ---- SHARED: keys -- keep identical ----
-# Needs KEY_PATTERN, CASE_INSENSITIVE_KEYS, REQUIRE_IN_NAME and
-# EXCLUDE_IN_NAME from the configuration block.
-def key_from(filename):
-	"""Pairing key = the leading Region token; everything after is ignored."""
-	import os
-	import re
-	stem = os.path.splitext(os.path.basename(filename))[0]
-	m = re.search(KEY_PATTERN, stem, re.IGNORECASE if CASE_INSENSITIVE_KEYS else 0)
-	if not m:
-		return None
-	key = m.group(1)
-	return key.lower() if CASE_INSENSITIVE_KEYS else key
-
-
-def name_allowed(filename):
-	"""Apply the REQUIRE_IN_NAME / EXCLUDE_IN_NAME filename filters."""
-	if REQUIRE_IN_NAME and REQUIRE_IN_NAME not in filename:
-		return False
-	if EXCLUDE_IN_NAME and EXCLUDE_IN_NAME in filename:
-		return False
-	return True
-# ---- END SHARED: keys ----
 
 
 # ---- SHARED: output_dir -- keep identical ----
@@ -496,103 +468,6 @@ def raster_union(roi_list):
 # ---- END SHARED: roi_geometry ----
 
 
-# ---- SHARED: bioformats -- keep identical ----
-# Opens ONE series with Bio-Formats (pyramidal .ims: not every level).
-def bf_series_count(path):
-	"""Number of series in the file, or 0 if it cannot be determined."""
-	from java.lang import Exception as JavaException
-	try:
-		from loci.formats import ImageReader
-		r = ImageReader()
-		try:
-			r.setId(path)
-			return r.getSeriesCount()
-		finally:
-			r.close()
-	except (Exception, JavaException):
-		return 0
-
-
-def tiff_truncation_error(path):
-	"""A message if a .tif/.tiff is shorter than its header says (readers
-	fill a cut-off file with zeros), else None (also when uncheckable)."""
-	import os
-	from java.lang import Exception as JavaException
-	if os.path.splitext(path)[1].lower() not in (".tif", ".tiff"):
-		return None
-	try:
-		from ij.io import TiffDecoder, FileInfo
-		infos = TiffDecoder(os.path.dirname(path),
-		                    os.path.basename(path)).getTiffInfo()
-		if not infos:
-			return None
-		need = 0
-		for fi in infos:
-			if fi.stripOffsets is not None and fi.stripLengths is not None:
-				for off, n in zip(fi.stripOffsets, fi.stripLengths):
-					need = max(need, off + n)
-			# A contiguous stack lists only the first image's strips.
-			k = fi.nImages
-			if k > 1 and fi.compression == FileInfo.COMPRESSION_NONE:
-				need = max(need, fi.getOffset()
-				           + fi.width * fi.height * fi.getBytesPerPixel() * k
-				           + max(0, fi.getGap()) * (k - 1))
-		size = os.path.getsize(path)
-	except (Exception, JavaException):
-		return None
-	if size < need:
-		return ("the file is truncated (%d bytes, expected at least %d) - "
-		        "re-export it" % (size, need))
-	return None
-
-
-def bf_open(path, series_index=0):
-	"""Open one series, no window: (imp, n_series). Raises StepError."""
-	from java.lang import Exception as JavaException
-	try:
-		from loci.plugins import BF
-		# 'in' is a keyword: loci.plugins.in needs __import__.
-		ImporterOptions = __import__("loci.plugins.in", globals(), locals(),
-		                             ["ImporterOptions"]).ImporterOptions
-	except (Exception, JavaException), e:
-		raise StepError("Bio-Formats is not available (%s). Install it via "
-		                "Help > Update... > Manage update sites > "
-		                "'Bio-Formats', then restart Fiji." % str(e))
-
-	truncated = tiff_truncation_error(path)
-	if truncated:
-		raise StepError(truncated)
-	n_series = bf_series_count(path)
-	if n_series and series_index >= n_series:
-		raise StepError(
-		    "series %d was requested but the file has only %d series "
-		    "(numbered from 0). Use 0 for full resolution."
-		    % (series_index, n_series))
-	try:
-		opts = ImporterOptions()
-		opts.setId(path)
-		opts.setOpenAllSeries(False)
-		opts.clearSeries()
-		opts.setSeriesOn(series_index, True)
-		opts.setVirtual(False)
-		imps = BF.openImagePlus(opts)
-	except (Exception, JavaException), e:
-		raise StepError(
-		    "Bio-Formats could not open it: %s\n"
-		    "      Try opening this file by hand (File > Import > "
-		    "Bio-Formats) to see the underlying error." % str(e))
-	if imps is None or len(imps) == 0:
-		raise StepError("Bio-Formats opened the file but returned no image.")
-	imp = imps[0]
-	for extra in imps[1:]:
-		try:
-			extra.close()
-		except (Exception, JavaException):
-			pass
-	return imp, n_series
-# ---- END SHARED: bioformats ----
-
-
 # ---- SHARED: run_record -- keep identical ----
 # The parameter record: every setting a run used, saved with the outputs.
 # A failure to write it is only logged.
@@ -649,6 +524,8 @@ def write_run_record(out_dir, script_name, script_version, items):
 # ---- SHARED: user_checks -- keep identical ----
 def confirm_settings(script_name, lines, enabled):
 	"""Run / Cancel window; True = go ahead. "!" lines: warnings, logged."""
+	if globals().get("_UNATTENDED"):         # Run Stages for an Animal
+		return _UNATTENDED.check(script_name, lines)
 	from ij import IJ
 	warn = ["WARNING: " + ln[1:].strip() for ln in lines if ln.startswith("!")]
 	info = [ln for ln in lines if not ln.startswith("!")]
@@ -763,6 +640,8 @@ def layout_pick_region(slide, typed):
 	import os
 	from ij import Prefs
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.pick_region(slide, typed)
 	regions = layout_regions(slide)
 	typed = (typed or "").strip()
 	hits = typed and layout_match_region(regions, typed) or []
@@ -822,6 +701,8 @@ def layout_confirm(title, slide, region, fields):
 	import os
 	from ij import IJ
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.confirm(title, slide, region, fields)
 	pick_one = "(choose one)"
 	vals = [f[2] or "" for f in fields]
 	for _try in range(3):
@@ -868,73 +749,6 @@ def layout_confirm(title, slide, region, fields):
 		return out
 	return None
 # ---- END SHARED: slide_layout ----
-
-
-# ---- SHARED: slide_files -- keep identical ----
-# Single-image scripts: the files of one section in a folder. Needs the
-# keys block (key_from, KEY_PATTERN, CASE_INSENSITIVE_KEYS).
-def layout_files_for(folder, key, exts):
-	"""Files in folder whose RegionXXXX key is key, sorted."""
-	import os
-	try:
-		names = sorted(os.listdir(folder))
-	except OSError:
-		return []
-	return [os.path.join(folder, n) for n in names if not n.startswith(".")
-	        and os.path.splitext(n)[1].lower() in exts and key_from(n) == key]
-
-
-def layout_keys(folder, exts):
-	"""RegionXXXX keys of the files in folder (as written), sorted."""
-	import os
-	import re
-	out = {}
-	try:
-		names = sorted(os.listdir(folder))
-	except OSError:
-		return []
-	for n in names:
-		if os.path.splitext(n)[1].lower() in exts and key_from(n) is not None:
-			m = re.search(KEY_PATTERN, os.path.splitext(n)[0],
-			              re.IGNORECASE if CASE_INSENSITIVE_KEYS else 0)
-			out.setdefault(key_from(n), m.group(1) if m else key_from(n))
-	return [out[k] for k in sorted(out)]
-
-
-def layout_pick_section(keys, typed):
-	"""The section to use: the typed one, or a choice (None: told why)."""
-	from ij import IJ
-	from ij.gui import GenericDialog
-	typed = (typed or "").strip()
-	if not keys:
-		IJ.error("Section", "No RegionXXXX files were found for this stage.")
-		return None
-	if typed:
-		hits = [k for k in keys if key_from(k) == key_from(typed)]
-		if hits:
-			return hits[0]
-		IJ.error("Section", "'%s' was not found. Sections here: %s"
-		         % (typed, ", ".join(keys[:30])))
-		return None
-	gd = GenericDialog("Choose the section")
-	gd.addChoice("Section", keys, keys[0])
-	gd.showDialog()
-	if gd.wasCanceled():
-		return None
-	return gd.getNextChoice()
-
-
-def layout_default(cands, hints):
-	"""The only candidate, or the only one starting alike with a hint (the
-	section's bgsub image); else "" (the user chooses)."""
-	import os
-	if len(cands) == 1:
-		return cands[0]
-	st = lambda p: os.path.splitext(os.path.basename(p))[0]
-	hit = [c for c in cands if [h for h in hints if st(h).startswith(st(c))
-	                            or st(c).startswith(st(h))]]
-	return hit[0] if len(hit) == 1 else ""
-# ---- END SHARED: slide_files ----
 
 
 # ---- SHARED: experiment_layout -- keep identical ----
@@ -1028,25 +842,15 @@ if globals().get("slideDir") is not None:
 	_REGION = layout_pick_region(_SLIDE, regionName)
 	if _REGION is None:
 		raise SystemExit
-	_KEYS = layout_keys(layout_find(_SLIDE, _REGION, "xml"), ('.xml',))
-	_SEC = layout_pick_section(_KEYS, sectionKey)
-	if _SEC is None:
-		raise SystemExit
-	_K = key_from(_SEC)
-	_HINTS = layout_files_for(layout_find(_SLIDE, _REGION, "processed_bgsub_cleared"), _K, (".tif", ".tiff"))
-	_c_xmlFile = layout_files_for(layout_find(_SLIDE, _REGION, "xml"), _K, ('.xml',))
-	_c_showImage = layout_files_for(layout_find(_SLIDE, _REGION, "tifs"), _K, ('.tif', '.tiff'))
-	_got = layout_confirm(SCRIPT_NAME + " - " + _SEC, _SLIDE, _REGION, [
-	    ('NeuroInfo XML file (from xml/)', "choice", layout_default(_c_xmlFile, _HINTS), _c_xmlFile, True),
-	    ('Image to show the ROIs on (optional)', "choice", layout_default(_c_showImage, _HINTS), _c_showImage, False),
+	_got = layout_confirm(SCRIPT_NAME + " - folders", _SLIDE, _REGION, [
+	    ('Folder of NeuroInfo XML files (xml/)', "dir", layout_find(_SLIDE, _REGION, "xml"), None, True),
 	])
 	if _got is None:
 		raise SystemExit
-	xmlFile = _F(_got[0]) if _got[0] else None
-	showImage = _F(_got[1]) if _got[1] else None
+	inputDir = _F(_got[0]) if _got[0] else None
 
 
-XML_PATH = xmlFile.getAbsolutePath() if xmlFile is not None else "(none)"
+IN_DIR = inputDir.getAbsolutePath()
 
 ACTION_WARN = (validationAction == "warn and convert anyway")
 ACTION_SKIP = (validationAction == "skip the file")
@@ -2128,49 +1932,42 @@ def first_file_lines(path):
 
 
 
-# ========================================================== SINGLE FILE
-TITLE = "2a NeuroInfo XML to ROI (single)"
-
-# ---- pre-flight checks
-if xmlFile is None or not os.path.isfile(XML_PATH):
-	IJ.error(TITLE,
-	         "The XML file does not exist:\n%s\n\nChoose one NeuroInfo .xml "
-	         "export (usually in the xml/ folder)." % XML_PATH)
-	raise SystemExit
-if not XML_PATH.lower().endswith(".xml"):
-	IJ.error(TITLE,
-	         "This does not look like a NeuroInfo XML export (the name does "
-	         "not end in .xml):\n%s\n\nChoose the .xml file NeuroInfo "
-	         "exported for this section." % XML_PATH)
+# ================================================================= BATCH
+if not os.path.isdir(IN_DIR):
+	IJ.error("Input folder",
+	         "The input folder does not exist:\n%s\n\nChoose the folder that "
+	         "holds the NeuroInfo .xml exports (usually xml/)." % IN_DIR)
 	raise SystemExit
 
-IMG_PATH = None
-NOT_FOUND = "(no Region key)"
-if showImage is not None:
-	img_given = showImage.getAbsolutePath()
-	if not showResult:
-		IJ.log("Note: an image was given but 'Show the result' is off, so "
-		       "the image was ignored:\n  %s" % img_given)
-	elif not os.path.isfile(img_given):
-		IJ.error(TITLE,
-		         "The image to show the ROIs on does not exist:\n%s\n\n"
-		         "Choose the image, or clear that field to convert without "
-		         "showing." % img_given)
-		raise SystemExit
-	else:
-		IMG_PATH = img_given
+names_in = [f for f in os.listdir(IN_DIR)
+            if fnmatch.fnmatch(f, filePattern)
+            and os.path.isfile(os.path.join(IN_DIR, f))]
+names_in.sort()   # zero-padded numbering means lexical sort is correct
 
-XML_DIR = os.path.dirname(XML_PATH)
-fname = os.path.basename(XML_PATH)
-stem = os.path.splitext(fname)[0]
-out_stem = stem + OUTPUT_SUFFIX
+if not names_in:
+	any_xml = [f for f in os.listdir(IN_DIR) if f.lower().endswith('.xml')]
+	extra = ""
+	if any_xml:
+		extra = ("\n\nThere ARE .xml files in that folder, e.g.:\n  %s\n"
+		         "Adjust the filename pattern to match."
+		         % "\n  ".join(sorted(any_xml)[:5]))
+	IJ.error("No input files",
+	         "No files matching the filename pattern '%s' in:\n%s%s"
+	         % (filePattern, IN_DIR, extra))
+	raise SystemExit
 
 _ON = re.sub(r'[\\/:*?"<>|]', "_", (outFolderName or "").strip() or "rois").strip() or "rois"
 _OUT_EXISTED = os.path.isdir(os.path.join(outParentDir is not None and outParentDir.getAbsolutePath()
-                             or os.path.dirname(os.path.normpath(XML_DIR)), _ON))
-OUT_DIR = resolve_output_dir(XML_DIR, outFolderName, "rois", outParentDir)
+                             or os.path.dirname(os.path.normpath(IN_DIR)), _ON))
+OUT_DIR = resolve_output_dir(IN_DIR, outFolderName, "rois", outParentDir)
 if OUT_DIR is None:
 	raise SystemExit
+
+# ---- Check settings window: say what is about to happen, then Run / Cancel
+_others = sorted([f for f in os.listdir(IN_DIR)
+                  if f not in names_in and not f.startswith(".")
+                  and os.path.isfile(os.path.join(IN_DIR, f))])
+_other_xml = [f for f in _others if f.lower().endswith(".xml")]
 def reviewed_zips(out_dir):
 	"""Names of ROI sets edited in 2a.i Review (from its log in out_dir)."""
 	try:
@@ -2197,335 +1994,407 @@ def keep_reviewed(path):
 	IJ.log("    reviewed ROI set kept as %s" % dst)
 
 
-out_path = os.path.join(OUT_DIR, out_stem + ".zip")
-existed_before = os.path.exists(out_path)
-if existed_before and not overwrite:
-	IJ.error(TITLE,
-	         "The output file already exists:\n%s\n\nTick 'Overwrite the "
-	         ".zip if it already exists' to replace it, or move the old "
-	         "file out of the way first." % out_path)
-	raise SystemExit
+_existing = [f for f in names_in
+             if os.path.exists(os.path.join(
+                 OUT_DIR, os.path.splitext(f)[0] + OUTPUT_SUFFIX + ".zip"))]
+_nokey = [f for f in names_in
+          if not re.search(PAIRING_KEY_PATTERN, os.path.splitext(f)[0])]
 
-REVIEWED = existed_before and os.path.basename(out_path) in reviewed_zips(OUT_DIR)
-key_warning = None
-if IMG_PATH is not None:
-	k_xml, k_img = key_from(XML_PATH), key_from(IMG_PATH)
-	if (k_xml or k_img) and k_xml != k_img:
-		key_warning = ("The XML and the image look like different sections: "
-		               "'%s' is %s but '%s' is %s."
-		               % (fname, k_xml or NOT_FOUND,
-		                  os.path.basename(IMG_PATH), k_img or NOT_FOUND))
-
-# ---- Check settings window
-check_lines = ["XML file: %s" % XML_PATH, "Output file: %s" % out_path]
-if existed_before:
-	check_lines.append("    (it exists and will be replaced: 'Overwrite' is ticked)")
-check_lines.append("Image to show the ROIs on: " + (
-    IMG_PATH if IMG_PATH is not None else "ignored ('Show the result' is off)"
-    if showImage is not None else "none"))
-check_lines += ["Y axis: %s" % yMode, "ROI composition: %s" % compositionMode]
+check_lines = []
+check_lines.append("Input folder: %s" % IN_DIR)
+check_lines.append("XML files to convert: %d (matching '%s')"
+                   % (len(names_in), filePattern))
+if _others:
+	check_lines.append("Left out (not matching the pattern): %d file(s), e.g. %s"
+	                   % (len(_others), ", ".join(_others[:3])))
+check_lines.append("Output folder: %s" % OUT_DIR)
+check_lines.append("Example: %s -> %s.zip"
+                   % (names_in[0], os.path.splitext(names_in[0])[0] + OUTPUT_SUFFIX))
+if _existing and skipExisting:
+	check_lines.append("Already converted: %d of %d file(s) have a .zip and "
+	                   "will be skipped" % (len(_existing), len(names_in)))
+elif not _existing:
+	check_lines.append("No .zip exists yet for these files.")
+check_lines.append("Y axis: %s" % yMode)
+check_lines.append("ROI composition: %s" % compositionMode)
 if COMPOSE_REGIONS:
-	check_lines.extend(region_preview([XML_PATH]))
-UNIFYING = COMPOSE_UNIFY or COMPOSE_HEMI2 or COMPOSE_HEMI3
-if UNIFYING and UNIFY_INCLUDE_NAMES:
-	check_lines.append("    only these regions take part: %s"
-	                   % ", ".join(UNIFY_INCLUDE_NAMES))
-if UNIFYING and UNIFY_EXCLUDE_NAMES:
-	check_lines.append("    these regions are left out: %s"
-	                   % ", ".join(UNIFY_EXCLUDE_NAMES))
+	check_lines.extend(region_preview([os.path.join(IN_DIR, f) for f in names_in]))
+if (COMPOSE_UNIFY or COMPOSE_HEMI2 or COMPOSE_HEMI3):
+	if UNIFY_INCLUDE_NAMES:
+		check_lines.append("    only these regions take part: %s"
+		                   % ", ".join(UNIFY_INCLUDE_NAMES))
+	if UNIFY_EXCLUDE_NAMES:
+		check_lines.append("    these regions are left out: %s"
+		                   % ", ".join(UNIFY_EXCLUDE_NAMES))
 check_lines.append("On validation problem: %s" % validationAction)
-check_lines.append("Name check: against the %d name(s) in EXPECTED_ROIS"
-                   % len(EXPECTED_ROIS) if EXPECTED_ROIS
-                   else "Name check: off (EXPECTED_ROIS is empty)")
+if EXPECTED_ROIS:
+	check_lines.append("Name check: against the %d name(s) in EXPECTED_ROIS"
+	                   % len(EXPECTED_ROIS))
+else:
+	check_lines.append("Name check: off (EXPECTED_ROIS is empty)")
 if EXPECTED_ROIS_AFTER_MATH:
 	check_lines.append("Check after composition: %d name(s) in "
 	                   "EXPECTED_ROIS_AFTER_MATH" % len(EXPECTED_ROIS_AFTER_MATH))
-_info, _warns = first_file_lines(XML_PATH)
-check_lines += _info + _warns
-check_lines += [_warning(m) for m in XML_MISMATCH]
-if key_warning:
-	check_lines.append(_warning(key_warning + " The ROIs may be shown on the "
-	                            "wrong image."))
-elif key_from(XML_PATH) is None:
+_info, _warns = first_file_lines(os.path.join(IN_DIR, names_in[0]))
+check_lines.extend(_info)
+check_lines.extend(_warns)
+check_lines.extend([_warning(m) for m in XML_MISMATCH])
+_REVIEWED = reviewed_zips(OUT_DIR)
+_rev = [os.path.splitext(f)[0] + OUTPUT_SUFFIX + ".zip" for f in _existing]
+_rev = [z for z in _rev if z in _REVIEWED]
+if _rev and not skipExisting:
 	check_lines.append(_warning(
-	    "The XML file name does not start with a RegionXXXX key (%s). Later "
-	    "stages pair ROI sets with images by that key, so %s.zip will not be "
-	    "matched to any image." % (fname, out_stem)))
-if REVIEWED:
-	check_lines.append(_warning("%s was edited in 2a.i Review. Replacing it loses "
-	                            "those edits; it is first copied to _before_review/ "
-	                            "as <name>_reviewed_<time>.zip." % os.path.basename(out_path)))
-if not confirm_settings(SCRIPT_NAME, experiment_lines(globals().get("_SLIDE") or XML_DIR) + check_lines, CONFIRM_BEFORE_RUN):
+	    "%d of these ROI sets were edited in 2a.i Review (%s). Replacing them "
+	    "loses those edits; each is first copied to _before_review/ as "
+	    "<name>_reviewed_<time>.zip." % (len(_rev), ", ".join(_rev[:6]))))
+if _existing and not skipExisting:
+	check_lines.append(_warning(
+	    "%d of the %d file(s) already have a .zip in the output folder; it "
+	    "will be replaced from the XML, so any changes made to those ROI sets "
+	    "by hand are lost. Tick 'Skip files whose .zip already exists' to "
+	    "keep them." % (len(_existing), len(names_in))))
+if _other_xml:
+	check_lines.append(_warning(
+	    "%d .xml file(s) in the input folder do not match the filename "
+	    "pattern '%s' and will not be converted: %s."
+	    % (len(_other_xml), filePattern, ", ".join(_other_xml[:3]))))
+if _nokey and len(_nokey) == len(names_in):
+	check_lines.append(_warning(
+	    "None of the matched file names start with a RegionXXXX key (e.g. "
+	    "%s). Later stages pair ROI sets with images by that key, so these "
+	    "ROI sets will not be matched to any image." % _nokey[0]))
+elif _nokey:
+	check_lines.append(_warning(
+	    "%d of the %d matched file names do not start with a RegionXXXX key "
+	    "(e.g. %s). Later stages pair ROI sets with images by that key, so "
+	    "those ROI sets will not be matched to any image."
+	    % (len(_nokey), len(names_in), ", ".join(_nokey[:3]))))
+if not confirm_settings(SCRIPT_NAME, experiment_lines(globals().get("_SLIDE") or IN_DIR) + check_lines, CONFIRM_BEFORE_RUN):
 	if not _OUT_EXISTED and os.path.isdir(OUT_DIR) and not os.listdir(OUT_DIR):
 		os.rmdir(OUT_DIR)      # created for this run only
 	IJ.log("%s: cancelled at the settings check; nothing was processed."
 	       % SCRIPT_NAME)
 	raise SystemExit
 
-for _ln in ("=" * 64, "NeuroInfo XML -> RoiSet (single file)",
-            "  xml : %s" % XML_PATH, "  out : %s" % out_path):
-	IJ.log(_ln)
-if IMG_PATH is not None:
-	IJ.log("  show on: %s" % IMG_PATH)
+IJ.log("=" * 64)
+IJ.log("NeuroInfo XML -> RoiSet batch")
+IJ.log("  in  : %s" % IN_DIR)
+IJ.log("  out : %s" % OUT_DIR)
+IJ.log("  %d file(s) matching '%s'" % (len(names_in), filePattern))
 IJ.log("  Y flip: %s   |   on problem: %s" % (Y_FLIP, validationAction))
 IJ.log("  composition: %s" % compositionMode)
-if UNIFYING and UNIFY_INCLUDE_NAMES:
-	IJ.log("     including ONLY: %s" % ", ".join(UNIFY_INCLUDE_NAMES))
-if UNIFYING and UNIFY_EXCLUDE_NAMES:
-	IJ.log("     excluding: %s" % ", ".join(UNIFY_EXCLUDE_NAMES))
-IJ.log("  validating against %d expected ROI name(s)" % len(EXPECTED_ROIS)
-       if EXPECTED_ROIS else "  EXPECTED_ROIS is empty - input validation is OFF")
-if key_warning:
-	IJ.log("  WARNING: %s" % key_warning)
+if (COMPOSE_UNIFY or COMPOSE_HEMI2 or COMPOSE_HEMI3):
+	if UNIFY_INCLUDE_NAMES:
+		IJ.log("     including ONLY: %s" % ", ".join(UNIFY_INCLUDE_NAMES))
+	if UNIFY_EXCLUDE_NAMES:
+		IJ.log("     excluding: %s" % ", ".join(UNIFY_EXCLUDE_NAMES))
+if EXPECTED_ROIS:
+	IJ.log("  validating against %d expected ROI name(s)" % len(EXPECTED_ROIS))
+else:
+	IJ.log("  EXPECTED_ROIS is empty - input validation is OFF")
 IJ.log("=" * 64)
 
-outcome = None          # "converted", "not written" or "failed"
-problems = []
-fail_msg = ""
-log_row = None
-written = None          # name -> Roi as read back from the written zip
-show_problems = []      # problems while showing the result (zip is fine)
-imp = None
-sx = sy = ox = oy = None
-side = None             # image side of the Left regions: "left" / "right"
-SIDE_REMINDER = ("Check that the other sections match: a section with Left "
-                 "on the other side may have been flipped in NeuroInfo.")
+log_rows = []
+converted_files = []
+failed_files = []
+flagged_files = []
+skipped_files = []
+no_region_files = []    # sections with none of the regions: no zip
+listed_names_already = False
+stopped_early = False
+left_side = {}          # stem -> "left" / "right": image side of the Left regions
+stop_reason = ""
 
-del _warnings_this_file[:]
-ctx = {"file": fname}
-IJ.showProgress(0.0)
-IJ.showStatus("[1/1] %s - converting" % stem)
+for i, fname in enumerate(names_in):
+	stem = os.path.splitext(fname)[0]
+	in_path = os.path.join(IN_DIR, fname)
+	out_stem = stem + OUTPUT_SUFFIX
+	out_path = os.path.join(OUT_DIR, out_stem + ".zip")
 
-try:
-	root, sx, sy, ox, oy = parse_xml(XML_PATH)
-	ctx.update({"scale_x": sx, "scale_y": sy, "origin_x": ox, "origin_y": oy})
+	del _warnings_this_file[:]
 
-	raw_names = contour_names(root)
+	if skipExisting and os.path.exists(out_path):
+		IJ.log("[%d/%d] %s  SKIPPED (zip already exists)" % (i + 1, len(names_in), stem))
+		skipped_files.append(stem)
+		log_rows.append([stem, "no", "", "", "", "", "", "", "",
+		                 "skipped - output already existed"])
+		continue
 
-	if LIST_NAMES_ON_FIRST_FILE:
-		uniq = sorted(set(raw_names))
-		for ln in (["", "  --- contour names found in %s (%d unique) ---"
-		            % (stem, len(uniq))] + ['      "%s",' % n for n in uniq]
-		           + ["  --- paste the ones you need into EXPECTED_ROIS ---", ""]):
-			IJ.log(ln)
+	IJ.showProgress(i, len(names_in))
+	IJ.showStatus("[%d/%d] %s - converting" % (i + 1, len(names_in), stem))
+	existed_before = os.path.exists(out_path)
 
-	problems = validate(raw_names, EXPECTED_ROIS, "in XML", ctx)
+	ctx = {"file": fname}
 
-	rois, short, degenerate = build_rois(root, sx, sy, ox, oy, ctx)
-	n_before = len(rois)
+	try:
+		root, sx, sy, ox, oy = parse_xml(in_path)
+		ctx.update({"scale_x": sx, "scale_y": sy, "origin_x": ox, "origin_y": oy})
 
-	if degenerate:
-		problems.append("in XML: %d contour(s) dropped as unusable: %s"
-		                % (len(degenerate), "; ".join(degenerate[:10])
-		                   + ("; ..." if len(degenerate) > 10 else "")))
-	if n_before != len(raw_names) - short:
-		problems.append("in XML: %d usable contour(s) but %d ROI(s) were "
-		                "built, so a contour was lost (two names collided)"
-		                % (len(raw_names) - short, n_before))
+		raw_names = contour_names(root)
 
-	negx = negative_x_message(raw_scale_x(root))
-	if negx:
-		problems.append("scale: " + negx)
-	offmsg = off_image_message(rois, "")
-	if offmsg:
-		problems.append("position: " + offmsg)
+		if LIST_NAMES_ON_FIRST_FILE and not listed_names_already:
+			listed_names_already = True
+			uniq = sorted(set(raw_names))
+			IJ.log("")
+			IJ.log("  --- contour names found in %s (%d unique) ---" % (stem, len(uniq)))
+			for n in uniq:
+				IJ.log('      "%s",' % n)
+			IJ.log("  --- paste the ones you need into EXPECTED_ROIS ---")
+			IJ.log("")
 
-	side = left_side_of(rois)
-	if side:
-		IJ.log("      . Left regions are on the image's %s side. %s"
-		       % (side, SIDE_REMINDER))
+		problems = validate(raw_names, EXPECTED_ROIS, "in XML", ctx)
 
-	# ---- ROI composition ----
-	if COMPOSE_CODED:
-		try:
-			result = compose_rois(rois, ctx)
-		except (CompositionError, StepError), e:
-			raise ValueError("coded composition failed.\n  %s" % str(e))
-		except KeyError, e:
-			raise ValueError("coded composition referred to a name that does "
-			                 "not exist: %s" % str(e))
-		except ANY_ERROR, e:
-			raise ValueError(
-			    "coded composition raised an unexpected error: %s: %s"
-			    % (type(e).__name__, str(e)))
+		rois, short, degenerate = build_rois(root, sx, sy, ox, oy, ctx)
+		n_before = len(rois)
 
-		if result is not None:
-			rois = result
-		if not hasattr(rois, "items"):
-			raise ValueError("compose_rois() returned a %s instead of a dict "
-			                 "of name -> Roi." % type(rois).__name__)
+		if degenerate:
+			problems.append(
+			    "in XML: %d contour(s) dropped as unusable: %s"
+			    % (len(degenerate), "; ".join(degenerate[:10])
+			       + ("; ..." if len(degenerate) > 10 else "")))
+		if n_before != len(raw_names) - short:
+			problems.append(
+			    "in XML: %d usable contour(s) but %d ROI(s) were built, so "
+			    "a contour was lost (two names collided)"
+			    % (len(raw_names) - short, n_before))
 
-	elif not COMPOSE_NONE:
-		try:
-			rois, cnotes = built_in_composition(rois, ctx)
-		except (CompositionError, StepError), e:
-			raise ValueError("composition failed.\n  %s" % str(e))
-		except ANY_ERROR, e:
-			raise ValueError(
-			    "composition raised an unexpected error: %s: %s"
-			    % (type(e).__name__, str(e)))
-		for cn in cnotes:
-			IJ.log("      . %s" % cn)
+		negx = negative_x_message(raw_scale_x(root))
+		if negx:
+			problems.append("scale: " + negx)
+		offmsg = off_image_message(rois, "")
+		if offmsg:
+			problems.append("position: " + offmsg)
 
-	if COMPOSE_REGIONS and not rois:
-		raise ValueError("none of the regions to count (%s) is in this section, "
-		                 "so no ROI set was written%s" % (
-		                     globals().get("brainRegions") or "outermost regions",
-		                     os.path.isfile(out_path) and "; the existing %s.zip "
-		                     "was left as it was" % out_stem or ""))
+		side = left_side_of(rois)
+		if side:
+			left_side[stem] = side
+			IJ.log("      . Left regions are on the image's %s side" % side)
 
-	empties = [n for n, r in rois.items() if is_empty(r)]
-	if empties:
-		problems.append("after composition: %d ROI(s) have zero area and "
-		                "would be unusable for counting: %s"
-		                % (len(empties), ", ".join(empties[:10])))
+		# ---- ROI composition ----
+		if COMPOSE_NONE:
+			pass
 
-	problems.extend(validate(list(rois.keys()), EXPECTED_ROIS_AFTER_MATH,
-	                         "after composition", ctx))
+		elif COMPOSE_CODED:
+			try:
+				result = compose_rois(rois, ctx)
+			except (CompositionError, StepError), e:
+				raise ValueError("coded composition failed.\n  %s" % str(e))
+			except KeyError, e:
+				raise ValueError(
+				    "coded composition referred to a name that does not "
+				    "exist: %s\n  Run once with EXPECTED_ROIS empty to print "
+				    "the real names." % str(e))
+			except ANY_ERROR, e:
+				raise ValueError(
+				    "coded composition raised an unexpected error: %s: %s"
+				    % (type(e).__name__, str(e)))
 
-	problems += ["from compose_rois(): %s" % w for w in _warnings_this_file]
+			if result is not None:
+				rois = result
+			if not hasattr(rois, "items"):
+				raise ValueError(
+				    "compose_rois() returned a %s instead of a dict of "
+				    "name -> Roi. Either mutate the dict in place and return "
+				    "it, or return a new dict." % type(rois).__name__)
 
-	stats = [str(len(raw_names)), str(n_before), str(len(rois)),
-	         "%.6f" % sx, "%.6f" % sy, "%.3f" % ox, "%.3f" % oy]
+		else:
+			try:
+				rois, cnotes = built_in_composition(rois, ctx)
+			except (CompositionError, StepError), e:
+				raise ValueError("composition failed.\n  %s" % str(e))
+			except ANY_ERROR, e:
+				raise ValueError(
+				    "composition raised an unexpected error: %s: %s"
+				    % (type(e).__name__, str(e)))
+			for cn in cnotes:
+				IJ.log("      . %s" % cn)
 
-	if problems:
-		IJ.log("%s  PROBLEM(S):" % stem)
-		for p in problems:
-			IJ.log("      - %s" % p)
+		if COMPOSE_REGIONS and not rois:
+			IJ.log("[%d/%d] %s  none of the regions is in this section: no .zip"
+			       % (i + 1, len(names_in), stem))
+			no_region_files.append(stem)
+			if os.path.isfile(out_path):
+				if os.path.basename(out_path) in _REVIEWED:
+					keep_reviewed(out_path)
+				os.remove(out_path)
+				IJ.log("      the earlier %s.zip was removed, so later stages do "
+				       "not count it" % out_stem)
+			log_rows.append([stem, "no", str(len(raw_names)), str(n_before), "0",
+			                 "%.6f" % sx, "%.6f" % sy, "%.3f" % ox, "%.3f" % oy,
+			                 "none of the regions is in this section"])
+			continue
 
-	if problems and not ACTION_WARN:
-		outcome = "not written"
-		IJ.log("      -> no zip written (on validation problem: %s)"
-		       % validationAction)
-		log_row = [stem, "no"] + stats + [
-		    "not written on validation: " + " | ".join(problems)]
-	else:
+		empties = [n for n, r in rois.items() if is_empty(r)]
+		if empties:
+			problems.append(
+			    "after composition: %d ROI(s) have zero area and would be "
+			    "unusable for counting: %s"
+			    % (len(empties), ", ".join(empties[:10])))
+
+		problems.extend(validate(list(rois.keys()), EXPECTED_ROIS_AFTER_MATH,
+		                         "after composition", ctx))
+
+		for w in _warnings_this_file:
+			problems.append("from compose_rois(): %s" % w)
+
+		# ---- act on problems ----
 		if problems:
+			IJ.log("[%d/%d] %s  PROBLEM(S):" % (i + 1, len(names_in), stem))
+			for p in problems:
+				IJ.log("      - %s" % p)
+			flagged_files.append(stem)
+
+			if ACTION_STOP:
+				stopped_early = True
+				stop_reason = ("%s failed validation:\n\n%s"
+				               % (stem, "\n".join(["- " + p for p in problems])))
+				log_rows.append([stem, "no", str(len(raw_names)), str(n_before),
+				                 str(len(rois)), "%.6f" % sx, "%.6f" % sy,
+				                 "%.3f" % ox, "%.3f" % oy,
+				                 "STOPPED: " + " | ".join(problems)])
+				break
+
+			if ACTION_SKIP:
+				IJ.log("      -> skipped, no zip written")
+				log_rows.append([stem, "no", str(len(raw_names)), str(n_before),
+				                 str(len(rois)), "%.6f" % sx, "%.6f" % sy,
+				                 "%.3f" % ox, "%.3f" % oy,
+				                 "skipped on validation: " + " | ".join(problems)])
+				continue
+
 			IJ.log("      -> converting anyway (warn mode)")
+
 		if not rois:
 			raise ValueError("there are no ROIs left to write")
 
 		for _n, _r in rois.items():      # the pixel size, for areas in stage 3
 			_r.setProperty("um_per_px", "%.6f,%.6f" % (sx, sy))
-		IJ.showStatus("[1/1] %s - writing" % stem)
-		if REVIEWED and os.path.isfile(out_path):
+		IJ.showStatus("[%d/%d] %s - writing" % (i + 1, len(names_in), stem))
+		if os.path.basename(out_path) in _REVIEWED and os.path.isfile(out_path):
 			keep_reviewed(out_path)
 		try:
 			write_roiset(rois, out_path)
 		except StepError:
-			try:                # no half-written zip for later stages
+			# do not leave a half-written zip behind for later stages
+			try:
 				os.remove(out_path)
 			except OSError:
 				pass
 			raise
-		outcome = "converted"
+		converted_files.append(out_stem)
+
 		note = "ok" if not problems else "converted WITH WARNINGS"
-		IJ.log("%s  ->  %s.zip   %d ROI(s)   %.4f um/px%s"
-		       % (stem, out_stem, len(rois), sx,
+		IJ.log("[%d/%d] %s  ->  %s.zip   %d ROI(s)   %.4f um/px%s"
+		       % (i + 1, len(names_in), stem, out_stem, len(rois), sx,
 		          "   (replaced the existing zip)" if existed_before else ""))
-		log_row = [stem, "yes"] + stats + [
-		    note if not problems else note + ": " + " | ".join(problems)]
 
-		# Read back: what is listed and shown is what later stages read.
-		written = read_roiset(out_path)
-		IJ.log("  ROIs written (pixel bounds: x, y = top-left corner; w, h):")
-		for n, r in written.items():
-			b = r.getBounds()
-			IJ.log("      %-28s x=%d y=%d w=%d h=%d" % (n, b.x, b.y, b.width, b.height))
+		log_rows.append([stem, "yes", str(len(raw_names)), str(n_before),
+		                 str(len(rois)), "%.6f" % sx, "%.6f" % sy,
+		                 "%.3f" % ox, "%.3f" % oy,
+		                 note if not problems else note + ": " + " | ".join(problems)])
 
-except ANY_ERROR, e:
-	outcome = "failed"
-	if isinstance(e, (ValueError, StepError)):
-		what, fail_msg = "FAILED", str(e)
-	else:
-		what = "UNEXPECTED ERROR"
-		fail_msg = "unexpected error: %s: %s" % (type(e).__name__, str(e))
-	IJ.log("%s  %s: %s" % (stem, what, fail_msg))
-	log_row = [stem] + ["no"] + [""] * 7 + [what + ": " + fail_msg.replace("\n", " ")]
+	except (ValueError, StepError), e:
+		failed_files.append(stem)
+		IJ.log("[%d/%d] %s  FAILED: %s" % (i + 1, len(names_in), stem, str(e)))
+		log_rows.append([stem, "no", "", "", "", "", "", "", "",
+		                 "FAILED: " + str(e).replace("\n", " ")])
+		if ACTION_STOP:
+			stopped_early = True
+			stop_reason = "%s failed:\n\n%s" % (stem, str(e))
+			break
 
-
-if outcome == "converted" and IMG_PATH is not None:
-	IJ.showStatus("[1/1] %s - opening the image" % stem)
-	shown = False
-	try:
-		try:
-			from ij.plugin.frame import RoiManager
-			imp, _n_series = bf_open(IMG_PATH, 0)
-			W, H = imp.getWidth(), imp.getHeight()
-			outside = [n for n, b in [(n, r.getBounds()) for n, r in written.items()]
-			           if b.x < 0 or b.y < 0 or b.x + b.width > W
-			           or b.y + b.height > H]
-			if outside:
-				show_problems.append(
-				    "%d ROI(s) extend past the edge of the %d x %d image: %s. "
-				    "Mirrored top-to-bottom: try the other Y axis setting; "
-				    "left-to-right: the x scale or the section may be flipped; "
-				    "otherwise check that this is the image the XML was drawn "
-				    "on." % (len(outside), W, H, ", ".join(outside[:10])))
-			imp.show()
-			rm = RoiManager.getInstance()
-			if rm is None:
-				rm = RoiManager()
-			if CLEAR_ROI_MANAGER_BEFORE_SHOWING:
-				rm.reset()
-			elif rm.getCount() > 0:
-				IJ.log("  note: the ROI Manager already held %d ROI(s); this "
-				       "file's ROIs were added after them." % rm.getCount())
-			for n, r in written.items():
-				rm.addRoi(r)
-			rm.runCommand(imp, "Show All with labels")
-			shown = True
-			IJ.log("  shown on %s (%d ROI(s) in the ROI Manager)"
-			       % (os.path.basename(IMG_PATH), len(written)))
-		except ANY_ERROR, e:
-			show_problems.append("the ROIs were written, but the image could "
-			                     "not be shown: " + (str(e) if isinstance(e, StepError)
-			                     else "%s: %s" % (type(e).__name__, str(e))))
-	finally:
-		if imp is not None and not shown:
-			imp.changes = False
-			imp.close()
-	for p in show_problems:
-		IJ.log("  WARNING: %s" % p)
-elif outcome == "converted":
-	IJ.log("  no image given - the ROIs were written and not shown")
+	except ANY_ERROR, e:
+		failed_files.append(stem)
+		msg = "%s: %s" % (type(e).__name__, str(e))
+		IJ.log("[%d/%d] %s  UNEXPECTED ERROR: %s" % (i + 1, len(names_in), stem, msg))
+		log_rows.append([stem, "no", "", "", "", "", "", "", "",
+		                 "UNEXPECTED ERROR: " + msg.replace("\n", " ")])
+		if ACTION_STOP:
+			stopped_early = True
+			stop_reason = "%s raised an unexpected error:\n\n%s" % (stem, msg)
+			break
 
 IJ.showProgress(1.0)
 IJ.showStatus("")
 
 
-log_path = None
-if writeLog and log_row is not None:
-	log_path = os.path.join(OUT_DIR, "_conversion_log_%s.csv" % stem)
-	if os.path.exists(log_path) and not overwrite:
-		IJ.log("Debug log NOT saved - the file already exists (tick "
-		       "'Overwrite the .zip if it already exists' to replace it): %s"
-		       % log_path)
-		log_path = None
+# --------------------------------------------- left / right side check
+# Every file with both -L and -R regions says which side of the image its
+# Left regions are on. A section flipped in NeuroInfo exports contours that
+# are mirrored relative to the image, and nothing else in the pipeline
+# notices on a roughly symmetric section, so files that disagree with the
+# others are flagged here.
+MIRROR_TEXT = ("Left/Right on the opposite side from the other sections: the "
+               "section may have been flipped in NeuroInfo, so its contours may "
+               "be mirrored relative to the image. Check it with 4 Build "
+               "Pipeline Composite before counting.")
+mirrored_files = []
+side_summary = None
+_n_l = sorted([k for k, v in left_side.items() if v == "left"])
+_n_r = sorted([k for k, v in left_side.items() if v == "right"])
+if _n_l or _n_r:
+	if len(_n_l) > len(_n_r):
+		majority, mirrored_files = "left", _n_r
+	elif len(_n_r) > len(_n_l):
+		majority, mirrored_files = "right", _n_l
 	else:
+		majority, mirrored_files = None, sorted(_n_l + _n_r)
+	if majority:
+		side_summary = ("Left side : Left regions on the image's %s side in "
+		                "%d of %d section(s)"
+		                % (majority, max(len(_n_l), len(_n_r)),
+		                   len(_n_l) + len(_n_r)))
+	else:
+		side_summary = ("Left side : no majority, Left regions on the image's "
+		                "left side in %d and right side in %d section(s)"
+		                % (len(_n_l), len(_n_r)))
+	if mirrored_files:
+		IJ.log("")
+		for st in mirrored_files:
+			IJ.log("WARNING: %s: Left regions on the image's %s side. %s"
+			       % (st, left_side[st], MIRROR_TEXT))
+			if st not in flagged_files:
+				flagged_files.append(st)
+			for r in log_rows:
+				if r[0] == st:
+					r[-1] = str(r[-1]) + " | " + MIRROR_TEXT
+
+
+log_path = None
+if writeLog:
+	# 2a has no Overwrite option, so each run gets its own debug log
+	# (timestamped) instead of replacing an earlier one.
+	import time as _time
+	log_path = os.path.join(OUT_DIR, "_conversion_log_%s.csv"
+	                        % _time.strftime("%Y%m%d-%H%M%S"))
+	try:
+		fh = open(log_path, "w")
 		try:
-			fh = open(log_path, "w")
-			try:
-				fh.write("file,converted,contours_in_xml,rois_before_math,"
-				         "rois_written,scale_x_um_px,scale_y_um_px,"
-				         "origin_x_um,origin_y_um,status,left_regions_on_image_side\n")
+			fh.write("file,converted,contours_in_xml,rois_before_math,"
+			         "rois_written,scale_x_um_px,scale_y_um_px,"
+			         "origin_x_um,origin_y_um,status,left_regions_on_image_side\n")
+			for r in log_rows:
+				col = left_side.get(r[0], "")
+				if col and r[0] in mirrored_files:
+					col += " (OPPOSITE from the other sections)"
 				fh.write(",".join(['"%s"' % str(c).replace('"', "'")
-				                   for c in log_row + [side or ""]]) + "\n")
-			finally:
-				fh.close()
-			IJ.log("Log written: %s" % log_path)
-		except IOError, e:
-			log_path = None
-			IJ.log("WARNING: could not write the log CSV: %s" % str(e))
+				                   for c in r + [col]]) + "\n")
+		finally:
+			fh.close()
+		IJ.log("Log written: %s" % log_path)
+	except IOError, e:
+		log_path = None
+		IJ.log("WARNING: could not write the log CSV: %s" % str(e))
 
 
 record_path = None
 if WRITE_PARAMETER_RECORD:
 	items = [("#Dialog", "")] + layout_record() + [
-	         ("NeuroInfo XML file (from xml/)", XML_PATH),
-	         ("Output location (blank = beside the folder that holds the input file)", outParentDir.getAbsolutePath()
+	         ("Folder of NeuroInfo XML files (xml/)", IN_DIR),
+	         ("Output location (blank = one level above the input)", outParentDir.getAbsolutePath()
 	          if outParentDir is not None else "(blank)"),
 	         ("Name for the new output folder", outFolderName),
+	         ("Filename pattern", filePattern),
 	         ("Y axis", yMode),
 	         ("ROI composition", compositionMode),
 	         ("   regions to count, separated by ; (blank = every outermost region)",
@@ -2534,63 +2403,89 @@ if WRITE_PARAMETER_RECORD:
 	          bool(globals().get("withSubregions"))),
 	         ("   hemispheres", globals().get("hemispheres") or ""),
 	         ("On validation problem", validationAction),
-	         ("Overwrite the .zip if it already exists", overwrite),
-	         ("Write a summary CSV to the output folder", writeLog),
-	         ("Image to show the ROIs on (optional)", showImage.getAbsolutePath()
-	          if showImage is not None else "(none)"),
-	         ("Show the result (image + ROIs in the ROI Manager)", showResult)]
+	         ("Skip files whose .zip already exists", skipExisting),
+	         ("Write a summary CSV to the output folder", writeLog)]
 	items.extend(config_record_items())
-	items.extend([("KEY_PATTERN", KEY_PATTERN),
-	              ("CASE_INSENSITIVE_KEYS", CASE_INSENSITIVE_KEYS),
-	              ("CLEAR_ROI_MANAGER_BEFORE_SHOWING",
-	               CLEAR_ROI_MANAGER_BEFORE_SHOWING)])
-	items += [("#Inputs", ""), ("xml file", XML_PATH),
-	          ("image shown on", IMG_PATH or "(none)"), ("output file", out_path),
-	          ("#Results", ""), ("outcome", outcome),
-	          ("rois written", len(written) if written else 0),
-	          ("left regions on image side", side or "(not checked)")]
+	items.append(("#Inputs", ""))
+	items.append(("input folder", IN_DIR))
+	items.append(("output folder", OUT_DIR))
+	for k, fname in enumerate(names_in):
+		items.append(("file %d" % (k + 1), os.path.join(IN_DIR, fname)))
+	items.append(("#Results", ""))
+	items.append(("converted", len(converted_files)))
+	items.append(("flagged", len(flagged_files)))
+	items.append(("failed", len(failed_files)))
+	items.append(("skipped", len(skipped_files)))
+	items.append(("sections without the regions", ", ".join(no_region_files) or "none"))
+	items.append(("left regions on image side", side_summary or "(not checked)"))
+	items.append(("possibly mirrored sections", ", ".join(mirrored_files) or "none"))
+	items.append(("stopped early", stopped_early))
 	record_path = write_run_record(OUT_DIR, SCRIPT_NAME, SCRIPT_VERSION, items)
 	if record_path:
 		IJ.log("Parameter record: %s" % record_path)
 
 
 IJ.log("-" * 64)
-IJ.log("%s: %s" % (stem, outcome))
+summary_lines = []
+summary_lines.append("Converted : %d" % len(converted_files))
+if flagged_files:
+	summary_lines.append("Flagged   : %d  (see Log)" % len(flagged_files))
+if failed_files:
+	summary_lines.append("Failed    : %d  (see Log)" % len(failed_files))
+if skipped_files:
+	summary_lines.append("Skipped   : %d  (zip already existed)" % len(skipped_files))
+if no_region_files:
+	summary_lines.append("No regions: %d section(s) hold none of the regions (no "
+	                     ".zip): %s" % (len(no_region_files),
+	                                    _short_list(no_region_files, 8)))
+_never = [l for l, k in region_entries(globals().get("brainRegions"))
+          if COMPOSE_REGIONS and k not in REGIONS_FOUND]
+if _never and not stopped_early:
+	summary_lines.append("Not found : %s - in none of the sections; check the "
+	                     "spelling against the names in the Log"
+	                     % ", ".join(_never))
+if side_summary:
+	summary_lines.append(side_summary)
+if mirrored_files:
+	summary_lines.append("Mirrored? : %d section(s) with %s"
+	                     % (len(mirrored_files), MIRROR_TEXT))
+	summary_lines.append("            %s" % _short_list(mirrored_files, 12))
+
+for line in summary_lines:
+	IJ.log(line)
 IJ.log("-" * 64)
 
-body = []
-if outcome == "converted":
-	title = TITLE + " - done"
-	body.append("Converted %s -> %s.zip  (%d ROI(s))"
-	            % (fname, out_stem, len(written)))
-	if problems:
-		title = TITLE + " - with problems"
-		body += ["", "It was written WITH WARNINGS (warn mode):"]
-		body.extend(["- " + p for p in problems[:8]])
-elif outcome == "not written":
-	title = TITLE + " - with problems"
-	body += ["%s was NOT converted: it failed validation and 'On validation "
-	         "problem' is set to '%s'." % (fname, validationAction), ""]
-	body.extend(["- " + p for p in problems[:8]])
-else:
-	title = TITLE + " - with failures"
-	body += ["%s could NOT be converted:" % fname, "", fail_msg]
-if (show_problems or key_warning) and not title.endswith("- with failures"):
-	title = TITLE + " - with problems"
-if show_problems:
-	body += [""] + ["- " + p for p in show_problems]
-if key_warning:
-	body += ["", "WARNING: " + key_warning]
-if side:
-	body += ["", "Left regions are on the image's %s side. %s"
-	         % (side, SIDE_REMINDER)]
-body += ["", "Output folder: %s" % OUT_DIR]
-if log_path:
-	body.append("Log: %s" % log_path)
-if record_path:
-	body.append("Parameter record: %s" % record_path)
-body += ["", "Check the Log window for the ROI names and pixel bounds."
-         if outcome == "converted" else "Check the Log window for the details."]
-
 IJ.beep()
-IJ.showMessage(title, "\n".join(body))
+
+if stopped_early:
+	IJ.error("Batch STOPPED early",
+	         "The run was set to stop on the first problem.\n\n"
+	         + stop_reason
+	         + "\n\n" + "\n".join(summary_lines)
+	         + "\n\nOutput folder: %s" % OUT_DIR
+	         + ("\nParameter record: %s" % record_path if record_path else "")
+	         + "\n\nFull detail is in the Log window.")
+else:
+	title = "Batch complete"
+	body = ["Finished processing %d file(s)." % len(names_in), ""]
+	body.extend(summary_lines)
+	body.append("")
+	body.append("Output folder: %s" % OUT_DIR)
+	if converted_files:
+		shown = converted_files[:12]
+		body.append("Written:")
+		for s in shown:
+			body.append("   %s.zip" % s)
+		if len(converted_files) > len(shown):
+			body.append("   ... and %d more" % (len(converted_files) - len(shown)))
+	if failed_files or flagged_files or _never:
+		title = "Batch complete - with problems"
+		body.append("")
+		body.append("Check the Log window for the details of each problem.")
+	if log_path or record_path:
+		body.append("")
+	if log_path:
+		body.append("Log: %s" % log_path)
+	if record_path:
+		body.append("Parameter record: %s" % record_path)
+	IJ.showMessage(title, "\n".join(body))

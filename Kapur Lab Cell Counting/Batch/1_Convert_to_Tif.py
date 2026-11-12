@@ -1,52 +1,52 @@
-# 1_Convert_to_Tif_(single).py
+# 1_Convert_to_Tif.py
 #
-# Fiji / ImageJ Jython script - Kapur Lab Cell Counting suite, step 1,
-# single-image version.
+# Fiji / ImageJ Jython script - Kapur Lab Cell Counting suite, step 1.
 #
-# Converts ONE microscope file to TIFF, with optional z-projection and
-# channel selection. Same processing, settings and output names as the
-# batch version (Batch > 1 Convert to Tif), so a file converted here lands
-# where, and under the name, a batch run would have put it. Each output
-# keeps the whole input name and only adds the projection and channel to
-# the end of it:
+# Converts a folder of microscope files to TIFF, one at a time, with
+# optional z-projection and channel selection. Each output keeps the whole
+# input name and only adds the projection and channel to the end of it:
 #
 #   Region0011_ChannelFITCTRITC_Seq0011.nd2
 #       ->  Region0011_ChannelFITCTRITC_Seq0011_MAX_C1.tif
 #           Region0011_ChannelFITCTRITC_Seq0011_MAX_C2.tif
 #
-# Menu  : Plugins > Kapur Lab Cell Counting > Single image >
-#         1 Convert to Tif (single)
-# Reads : one microscope file in any format Bio-Formats reads (.nd2, .ims,
-#         .czi, .tif, ...).
+# Menu  : Plugins > Kapur Lab Cell Counting > Batch > 1 Convert to Tif
+# Reads : one folder of microscope files of the type picked with "File type
+#         to convert" in the dialog: .nd2 (the default; when the folder has
+#         no .nd2 files the .ims files are converted instead) or .ims (only
+#         .ims files). Any format Bio-Formats reads can be added to
+#         KNOWN_FORMATS below.
 # Writes: a NEW folder (default name "tifs"; with 'Output location' blank
-#         it goes one level above the folder holding the file, or inside
-#         that folder when it holds a "<region> MBF" folder; see OUTPUT
-#         LOCATION) holding one .tif per channel (or one
-#         .tif), plus a parameter record
-#         _run_1_Convert_to_Tif_single_<time>.txt and, if asked for, a debug
-#         log _conversion_log_<input name>.csv (_conversion_log_<RegionXXXX>.csv
-#         with OUTPUT_STEM = "region").
+#         it goes one level above the input folder, or inside the input
+#         folder when that is a slide folder holding a "<region> MBF"
+#         folder; see OUTPUT LOCATION) holding one .tif per channel (or per
+#         file), plus a parameter record _run_1_Convert_to_Tif_<time>.txt and, if asked
+#         for, a debug log _conversion_log.csv.
+#
+# Only ONE format is ever processed in a single run. The "File type to
+# convert" switch in the dialog picks it (see FILE FORMAT in the
+# configuration block below).
 #
 # The later stages pair files by the leading RegionXXXX token, so anything
 # after it in the name is ignored. See OUTPUT NAMING in the configuration
 # block (OUTPUT_STEM = "region" names the outputs by that token only).
 #
 # Before it runs, the script shows a Check settings window that lists the
-# input, the output folder, each channel of the file (with the name
+# input, the output folder, each channel of the first file (with the name
 # and wavelength the file stores) and the output file it goes to, plus
 # warnings about likely mistakes. Press Run to go ahead or Cancel to stop
 # with nothing written. CONFIRM_BEFORE_RUN in the configuration block
 # turns the window off.
 #
-# Usage: Plugins > Kapur Lab Cell Counting > Single image >
-#        1 Convert to Tif (single), or open this file in the Script Editor
-#        (File > New > Script..., or Plugins > Scripting > Script Editor)
-#        with Language = Python (Jython) and press Run.
+# Usage: Plugins > Kapur Lab Cell Counting > Batch > 1 Convert to Tif, or
+#        open this file in the Script Editor (File > New > Script..., or
+#        Plugins > Scripting > Script Editor) with Language = Python
+#        (Jython) and press Run.
 
 #@ File    (label="Slide folder (the scripts find its subfolders)", style="directory") slideDir
-#@ String  (label="Section (e.g. Region0011; blank = choose from a list)", value="", required=false) sectionKey
 #@ String  (label="File type to convert", choices={".ims", ".nd2"}, style="radioButtonHorizontal") fileType
-#@ File    (label="Output location (blank = beside the folder that holds the input file)", style="directory", required=false) outParentDir
+#@ File    (label="Raw data top folder (the tree with the .nd2/.ims files that mirrors the slide folders; blank = in the slide folder)", style="directory", required=false) rawRoot
+#@ File    (label="Output location (blank = one level above the input, or inside a slide folder with an MBF folder)", style="directory", required=false) outParentDir
 #@ String  (label="Name for the new output folder", value="tifs") outFolderName
 #@ Boolean (label="Run a z-projection", value=true) doProject
 #@ String  (label="   projection type", choices={"Maximum intensity", "Average intensity", "Sum slices", "Minimum intensity", "Standard deviation", "Median"}, style="listBox") projectionType
@@ -57,7 +57,6 @@
 #@ Boolean (label="Save each channel as its own file", value=true) splitChannels
 #@ Boolean (label="Overwrite existing output files", value=false) overwrite
 #@ Boolean (label="Write a debug log CSV to the output folder", value=false) writeLog
-#@ Boolean (label="Show the result (open the saved TIFFs)", value=true) showResult
 
 
 # =========================================================================
@@ -66,11 +65,33 @@
 #
 # Everything a user may need to change lives between these two banners.
 # Nothing below the END OF USER CONFIGURATION banner needs editing for
-# routine use. These settings mean the same as in the batch version; keep
-# the two in step if you change one.
+# routine use.
+
+# ---- FILE FORMAT --------------------------------------------------------
 #
-# (No FILE FORMAT section here: this version converts whichever file you
-# pick, in any format Bio-Formats can read.)
+# A folder may hold both .nd2 and .ims files. Exactly one format is
+# processed per run. Pick it with the "File type to convert" switch in the
+# dialog (there is no setting to change here for that):
+#
+#   .nd2   (default) convert the .nd2 files. If the folder has no .nd2
+#          files, the .ims files are converted instead, and the Check
+#          settings window and the Log say so.
+#   .ims   convert the .ims files only. If the folder has no .ims files,
+#          the run stops before anything is written and says which other
+#          files are there.
+#
+# The protocol's sentence about changing PREFERRED_FORMAT to ".ims" now
+# means: set "File type to convert" to .ims.
+#
+# KNOWN_FORMATS lists the formats this script accepts. The FIRST entry is
+# the default type: picking it falls back to the later entries, in order,
+# when the folder has none of it. Picking any other entry converts that
+# format only. To add another format Bio-Formats can read (e.g. ".czi"),
+# append it here AND to the choices={...} list of the "File type to
+# convert" line at the top of this file. Write each with its leading dot;
+# upper/lower case does not matter.
+KNOWN_FORMATS = [".nd2", ".ims"]
+
 
 # ---- SERIES -------------------------------------------------------------
 #
@@ -81,8 +102,8 @@
 #
 # A multi-point (multi-position) .nd2 stores each XY position as its own
 # series of the same size. Only SERIES_INDEX is converted, so such a file
-# is flagged in the Log, in the completion message ("with problems") and
-# in the Check settings window.
+# is flagged in the Log, in the completion message ("with problems") and,
+# for the first file, in the Check settings window.
 SERIES_INDEX = 0
 
 
@@ -162,7 +183,7 @@ CONFIRM_BEFORE_RUN = True
 
 # ---- PARAMETER RECORD ---------------------------------------------------
 #
-# True: save _run_1_Convert_to_Tif_single_<date-time>.txt in the output folder,
+# True: save _run_1_Convert_to_Tif_<date-time>.txt in the output folder,
 # listing every setting this run used, so the TIFFs can be traced back to
 # exactly how they were made. False: do not write it.
 WRITE_PARAMETER_RECORD = True
@@ -177,17 +198,11 @@ WRITE_PARAMETER_RECORD = True
 # folder that will be used.
 TIFS_INSIDE_SLIDE_FOLDER = True
 
-# ---- SECTION KEYS ----
-# Used to list a slide's sections (RegionXXXX) when the slide folder is given.
-CASE_INSENSITIVE_KEYS = True
-REQUIRE_IN_NAME = ""
-EXCLUDE_IN_NAME = ""
-
 # =========================================================================
 # ===  END OF USER CONFIGURATION  =========================================
 # =========================================================================
 
-SCRIPT_NAME = "1_Convert_to_Tif_(single)"
+SCRIPT_NAME = "1_Convert_to_Tif"
 SCRIPT_VERSION = "2.0"
 
 
@@ -203,31 +218,6 @@ try:
 	HAVE_BIOFORMATS = True
 except ImportError:
 	HAVE_BIOFORMATS = False
-
-# ---- SHARED: keys -- keep identical ----
-# Needs KEY_PATTERN, CASE_INSENSITIVE_KEYS, REQUIRE_IN_NAME and
-# EXCLUDE_IN_NAME from the configuration block.
-def key_from(filename):
-	"""Pairing key = the leading Region token; everything after is ignored."""
-	import os
-	import re
-	stem = os.path.splitext(os.path.basename(filename))[0]
-	m = re.search(KEY_PATTERN, stem, re.IGNORECASE if CASE_INSENSITIVE_KEYS else 0)
-	if not m:
-		return None
-	key = m.group(1)
-	return key.lower() if CASE_INSENSITIVE_KEYS else key
-
-
-def name_allowed(filename):
-	"""Apply the REQUIRE_IN_NAME / EXCLUDE_IN_NAME filename filters."""
-	if REQUIRE_IN_NAME and REQUIRE_IN_NAME not in filename:
-		return False
-	if EXCLUDE_IN_NAME and EXCLUDE_IN_NAME in filename:
-		return False
-	return True
-# ---- END SHARED: keys ----
-
 
 # ---- SHARED: slide_layout -- keep identical ----
 # A stage's folders from ONE slide folder. A region folder: named with the
@@ -297,6 +287,8 @@ def layout_pick_region(slide, typed):
 	import os
 	from ij import Prefs
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.pick_region(slide, typed)
 	regions = layout_regions(slide)
 	typed = (typed or "").strip()
 	hits = typed and layout_match_region(regions, typed) or []
@@ -356,6 +348,8 @@ def layout_confirm(title, slide, region, fields):
 	import os
 	from ij import IJ
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.confirm(title, slide, region, fields)
 	pick_one = "(choose one)"
 	vals = [f[2] or "" for f in fields]
 	for _try in range(3):
@@ -402,73 +396,6 @@ def layout_confirm(title, slide, region, fields):
 		return out
 	return None
 # ---- END SHARED: slide_layout ----
-
-
-# ---- SHARED: slide_files -- keep identical ----
-# Single-image scripts: the files of one section in a folder. Needs the
-# keys block (key_from, KEY_PATTERN, CASE_INSENSITIVE_KEYS).
-def layout_files_for(folder, key, exts):
-	"""Files in folder whose RegionXXXX key is key, sorted."""
-	import os
-	try:
-		names = sorted(os.listdir(folder))
-	except OSError:
-		return []
-	return [os.path.join(folder, n) for n in names if not n.startswith(".")
-	        and os.path.splitext(n)[1].lower() in exts and key_from(n) == key]
-
-
-def layout_keys(folder, exts):
-	"""RegionXXXX keys of the files in folder (as written), sorted."""
-	import os
-	import re
-	out = {}
-	try:
-		names = sorted(os.listdir(folder))
-	except OSError:
-		return []
-	for n in names:
-		if os.path.splitext(n)[1].lower() in exts and key_from(n) is not None:
-			m = re.search(KEY_PATTERN, os.path.splitext(n)[0],
-			              re.IGNORECASE if CASE_INSENSITIVE_KEYS else 0)
-			out.setdefault(key_from(n), m.group(1) if m else key_from(n))
-	return [out[k] for k in sorted(out)]
-
-
-def layout_pick_section(keys, typed):
-	"""The section to use: the typed one, or a choice (None: told why)."""
-	from ij import IJ
-	from ij.gui import GenericDialog
-	typed = (typed or "").strip()
-	if not keys:
-		IJ.error("Section", "No RegionXXXX files were found for this stage.")
-		return None
-	if typed:
-		hits = [k for k in keys if key_from(k) == key_from(typed)]
-		if hits:
-			return hits[0]
-		IJ.error("Section", "'%s' was not found. Sections here: %s"
-		         % (typed, ", ".join(keys[:30])))
-		return None
-	gd = GenericDialog("Choose the section")
-	gd.addChoice("Section", keys, keys[0])
-	gd.showDialog()
-	if gd.wasCanceled():
-		return None
-	return gd.getNextChoice()
-
-
-def layout_default(cands, hints):
-	"""The only candidate, or the only one starting alike with a hint (the
-	section's bgsub image); else "" (the user chooses)."""
-	import os
-	if len(cands) == 1:
-		return cands[0]
-	st = lambda p: os.path.splitext(os.path.basename(p))[0]
-	hit = [c for c in cands if [h for h in hints if st(h).startswith(st(c))
-	                            or st(c).startswith(st(h))]]
-	return hit[0] if len(hit) == 1 else ""
-# ---- END SHARED: slide_files ----
 
 
 # ---- SHARED: experiment_layout -- keep identical ----
@@ -551,6 +478,30 @@ def experiment_lines(folder):
 # ---- END SHARED: experiment_layout ----
 
 
+# ---- SHARED: raw_tree -- keep identical ----
+# The .nd2 / .ims files may sit in another tree that mirrors the slide
+# folders (the same day / treatment / animal / slide folders, another top).
+def layout_raw(slide, raw_root, strict=True):
+	"""The slide's folder in the raw tree: the longest end of the slide's
+	path found below raw_root, or raw_root itself when it is named like the
+	slide. strict: the folder above must have the same name too, so another
+	animal's slide folder of the same name is never taken. None if not found."""
+	import os
+	if not raw_root:
+		return None
+	low = lambda p: [x.lower() for x in os.path.normpath(p).replace("\\", "/").split("/") if x]
+	parts = [p for p in os.path.normpath(slide).replace("\\", "/").split("/") if p]
+	end = low(slide)[-2:]
+	for k in range(1, len(parts)):
+		cand = os.path.join(raw_root, *parts[k:])
+		if os.path.isdir(cand) and (not strict or low(cand)[-2:] == end):
+			return cand
+	if low(raw_root)[-1:] == end[-1:] and (not strict or low(raw_root)[-2:] == end):
+		return raw_root
+	return None
+# ---- END SHARED: raw_tree ----
+
+
 # ---- slide folder -> this stage's folders and files ---------------------
 # The dialog asks for the slide folder only; the folders below are found in
 # it (slide_layout block) and shown for checking before anything runs. When
@@ -560,34 +511,20 @@ if globals().get("slideDir") is not None:
 	from java.io import File as _F
 	_SLIDE = slideDir.getAbsolutePath()
 	_REGION = _SLIDE
-	_T = (globals().get("fileType") or ".ims").strip(". ").lower()
-	_RAWS = [os.path.join(_SLIDE, n) for n in (_T,) if os.path.isdir(os.path.join(_SLIDE, n))] + [_SLIDE]
-	_X = ("." + _T,)            # only the file type chosen in the dialog
-	_KEYS = sorted(set(sum([layout_keys(d, _X) for d in _RAWS], [])))
-	if not _KEYS:
-		_O = _T == "ims" and "nd2" or "ims"
-		_N = sum([layout_keys(d, ("." + _O,)) for d in (os.path.join(_SLIDE, _O), _SLIDE)
-		          if os.path.isdir(d)], [])
-		IJ.error(SCRIPT_NAME, "No .%s files were found in %s (or its %s/ folder).%s"
-		         % (_T, _SLIDE, _T, _N and "\n\nIt has .%s files: choose that file type "
-		            "in the dialog." % _O or ""))
-		raise SystemExit
-	_SEC = layout_pick_section(_KEYS, sectionKey)
-	if _SEC is None:
-		raise SystemExit
-	_c = sum([layout_files_for(d, key_from(_SEC), _X) for d in _RAWS], [])
-	_RAWD = _c and os.path.dirname(_c[0]) or _RAWS[0]
-	_got = layout_confirm(SCRIPT_NAME + " - " + _SEC, _SLIDE, _SLIDE, [
-	    ("Microscope file (.ims, .nd2, ...)", "choice", _c[0] if _c else "", _c, True)])
+	_o = (fileType or "").strip(". ").lower() == "ims" and ("ims", "nd2") or ("nd2", "ims")
+	_RR = globals().get("rawRoot") and rawRoot.getAbsolutePath()
+	_BASE = _RR and layout_raw(_SLIDE, _RR) or (not _RR and _SLIDE) or ""
+	_RAW = [os.path.join(_BASE, n) for n in _o if _BASE and os.path.isdir(os.path.join(_BASE, n))]
+	_got = layout_confirm(SCRIPT_NAME + " - folders", _SLIDE, _SLIDE, [
+	    ("Folder of microscope files (nd2/)", "dir", (_RAW or [_BASE])[0], None, True)])
 	if _got is None:
 		raise SystemExit
-	inputFile = _F(_got[0])
-	if outParentDir is None and os.path.normpath(_RAWD) == os.path.normpath(_SLIDE):
-		outParentDir = _F(_SLIDE)       # raw files directly in the slide: tifs/ inside it
+	inputDir = _F(_got[0])
+	if outParentDir is None and (_RR or os.path.normpath(_got[0]) == os.path.normpath(_SLIDE)):
+		outParentDir = _F(_SLIDE)       # raw files elsewhere or directly in the slide: tifs/ in it
 
 
-IN_FILE = inputFile.getAbsolutePath()
-IN_DIR = os.path.dirname(IN_FILE)
+IN_DIR = inputDir.getAbsolutePath()
 
 PROJECTION_METHOD = {
     "Maximum intensity": "max",
@@ -810,6 +747,8 @@ def write_run_record(out_dir, script_name, script_version, items):
 # ---- SHARED: user_checks -- keep identical ----
 def confirm_settings(script_name, lines, enabled):
 	"""Run / Cancel window; True = go ahead. "!" lines: warnings, logged."""
+	if globals().get("_UNATTENDED"):         # Run Stages for an Animal
+		return _UNATTENDED.check(script_name, lines)
 	from ij import IJ
 	warn = ["WARNING: " + ln[1:].strip() for ln in lines if ln.startswith("!")]
 	info = [ln for ln in lines if not ln.startswith("!")]
@@ -896,12 +835,46 @@ if not HAVE_BIOFORMATS:
 	         "'Bio-Formats', then restart Fiji.")
 	raise SystemExit
 
-if not os.path.isfile(IN_FILE):
-	IJ.error("Input file",
-	         "The input file does not exist (or is a folder):\n%s\n\n"
-	         "Choose one microscope file, e.g. "
-	         "Region0011_ChannelFITCTRITC_Seq0011.nd2." % IN_FILE)
+if not os.path.isdir(IN_DIR):
+	IJ.error("Input folder",
+	         "The input folder does not exist:\n%s\n\n"
+	         "Choose the folder that holds the microscope files." % IN_DIR)
 	raise SystemExit
+
+
+def norm_ext(ext):
+	"""'.ND2' / 'nd2' / ' .nd2 ' -> '.nd2'."""
+	ext = str(ext).strip().lower()
+	if ext and not ext.startswith("."):
+		ext = "." + ext
+	return ext
+
+
+FORMATS = []
+for _e in KNOWN_FORMATS:
+	_e = norm_ext(_e)
+	if _e and _e != "." and _e not in FORMATS:
+		FORMATS.append(_e)
+
+if not FORMATS:
+	IJ.error("KNOWN_FORMATS",
+	         "KNOWN_FORMATS in the configuration block is empty.\n\n"
+	         "Set it to the file extensions to look for, e.g.\n"
+	         "    KNOWN_FORMATS = [\".nd2\", \".ims\"]")
+	raise SystemExit
+
+# The type picked in the dialog. The first entry of KNOWN_FORMATS is the
+# default type and falls back to the later entries; any other entry is
+# converted on its own.
+CHOSEN_FORMAT = norm_ext(fileType)
+if CHOSEN_FORMAT not in FORMATS:
+	IJ.error("File type to convert",
+	         "'File type to convert' is '%s', which is not in KNOWN_FORMATS "
+	         "(%s).\n\n"
+	         "Pick one of those, or add the extension to KNOWN_FORMATS in "
+	         "the configuration block." % (fileType, ", ".join(FORMATS)))
+	raise SystemExit
+FALLBACK_FORMATS = FORMATS[1:] if CHOSEN_FORMAT == FORMATS[0] else []
 
 if zStart and zStop and zStart > zStop:
 	IJ.error("Z range",
@@ -1285,10 +1258,74 @@ def existing_lines(planned):
 
 
 # ================================================================= SETUP
-fname = os.path.basename(IN_FILE)
-stem, stem_note = output_stem(fname)
-path = IN_FILE
+def list_format(ext):
+	return sorted([f for f in os.listdir(IN_DIR)
+	               if os.path.isfile(os.path.join(IN_DIR, f))
+	               and not f.startswith(".")
+	               and os.path.splitext(f)[1].lower() == ext])
 
+
+counts = {}
+for ext in FORMATS:
+	counts[ext] = list_format(ext)
+
+USE_FORMAT = CHOSEN_FORMAT
+format_note = None
+
+if not counts[USE_FORMAT]:
+	fallback = [e for e in FALLBACK_FORMATS if counts[e]]
+	if not fallback:
+		others = [e for e in FORMATS if e != USE_FORMAT and counts[e]]
+		if others:
+			IJ.error(
+			    "No %s files" % USE_FORMAT,
+			    "'File type to convert' is %s, but there are no %s files "
+			    "in:\n%s\n\nThe folder does contain: %s.\n\n"
+			    "To convert those, set 'File type to convert' to %s."
+			    % (USE_FORMAT, USE_FORMAT, IN_DIR,
+			       ", ".join(["%d %s file(s)" % (len(counts[e]), e)
+			                  for e in others]),
+			       " or ".join(others)))
+		else:
+			IJ.error("No convertible files",
+			         "No %s files in:\n%s\n\n"
+			         "The script looks for files ending in %s (KNOWN_FORMATS "
+			         "in the configuration block). Check that you picked the "
+			         "folder that holds the microscope files."
+			         % (" or ".join(FORMATS), IN_DIR, ", ".join(FORMATS)))
+		raise SystemExit
+	USE_FORMAT = fallback[0]
+	format_note = ("no %s files found; fell back to %s"
+	               % (CHOSEN_FORMAT, USE_FORMAT))
+
+files = counts[USE_FORMAT]
+skipped_format = [(e, len(counts[e])) for e in FORMATS
+                  if e != USE_FORMAT and counts[e]]
+
+# Output name stem per input file. Two inputs that would get the same stem
+# (Region0011_A.nd2 and Region0011_B.nd2 in "region" mode) stop the run
+# here, so one can never overwrite the other. Compared ignoring case, as
+# Windows and macOS folders do and as the later stages pair names.
+STEMS = {}
+by_stem = {}
+for fname in files:
+	STEMS[fname] = output_stem(fname)
+	by_stem.setdefault(STEMS[fname][0].lower(), []).append(fname)
+clashes = [sorted(v) for v in by_stem.values() if len(v) > 1]
+if clashes:
+	clashes.sort()
+	lines = ["   %s:  %s" % (STEMS[g[0]][0], ", ".join(g)) for g in clashes]
+	IJ.error("Output name clash",
+	         "These %s files would get the same output name, so one would "
+	         "overwrite the other:\n\n%s\n\n"
+	         "Nothing was converted. Rename the files so each RegionXXXX "
+	         "number appears once, or move the extra files to a separate "
+	         "folder, or set OUTPUT_STEM = \"full\" in the configuration "
+	         "block to keep the whole input names."
+	         % (USE_FORMAT, "\n".join(lines)))
+	raise SystemExit
+
+# The output folder is created only once there is something to convert.
 # Blank 'Output location': tifs/ goes inside a slide folder that holds a
 # "<region> MBF" folder (Set Up Slide Folders layout), else one level up.
 _MBF_RE = re.compile(r"(^|[^A-Za-z0-9])MBF([^A-Za-z0-9]|$)", re.IGNORECASE)
@@ -1309,15 +1346,42 @@ OUT_DIR = resolve_output_dir(IN_DIR, outFolderName, "tifs", _OUT_PARENT)
 if OUT_DIR is None:
 	raise SystemExit
 
-# ---- Check settings window (header read only; nothing written yet) -----
-LAYOUT = read_layout(IN_FILE)
-check = ["Input file: %s" % IN_FILE,
-         "Output folder: %s" % OUT_DIR]
+# ---- Check settings window (header reads only; nothing written yet) ----
+LAYOUTS = [read_layout(os.path.join(IN_DIR, f)) for f in files]
+check = ["Input folder: %s" % IN_DIR,
+         "Files to convert: %d %s file(s)" % (len(files), USE_FORMAT)]
+if format_note:
+	check.append("   (%s: the folder has no %s files, so its %s files "
+	             "will be converted)" % (format_note, CHOSEN_FORMAT, USE_FORMAT))
+for e, n in skipped_format:
+	check.append("   %d %s file(s) in the folder will be left alone" % (n, e))
+check.append("Output folder: %s" % OUT_DIR)
 check.extend(settings_text())
-check.extend(first_file_lines(IN_FILE, stem, LAYOUT, "the file"))
-if LAYOUT is not None:
-	check.extend(existing_lines(
-	    [nm for nm, _c in planned_outputs(stem, LAYOUT[0], LAYOUT[1])]))
+check.extend(first_file_lines(os.path.join(IN_DIR, files[0]),
+                              STEMS[files[0]][0], LAYOUTS[0], "the first file"))
+if LAYOUTS[0] is not None:
+	ref = (LAYOUTS[0][0], LAYOUTS[0][2])
+	differ = [(f, lay) for f, lay in zip(files[1:], LAYOUTS[1:])
+	          if lay is not None and (lay[0], lay[2]) != ref]
+	if differ:
+		shown = ["%s (%s)" % (f, channel_layout_text(lay)) for f, lay in differ[:5]]
+		more = len(differ) - len(shown)
+		check.append("!%d file(s) have a different channel layout from the "
+		             "first file (%s): %s%s. The same channel number may hold "
+		             "a different stain in those files."
+		             % (len(differ), channel_layout_text(LAYOUTS[0]), "; ".join(shown),
+		                " and %d more" % more if more else ""))
+unread = [f for f, lay in zip(files[1:], LAYOUTS[1:]) if lay is None]
+if unread:
+	check.append("!The header of %d file(s) could not be read (%s%s). They "
+	             "may fail to convert."
+	             % (len(unread), ", ".join(unread[:5]),
+	                " and %d more" % (len(unread) - 5) if len(unread) > 5 else ""))
+planned = []
+for f, lay in zip(files, LAYOUTS):
+	if lay is not None:
+		planned.extend([nm for nm, _c in planned_outputs(STEMS[f][0], lay[0], lay[1])])
+check.extend(existing_lines(planned))
 if not confirm_settings(SCRIPT_NAME, experiment_lines(globals().get("_SLIDE") or IN_DIR) + check, CONFIRM_BEFORE_RUN):
 	if not _OUT_EXISTED and os.path.isdir(OUT_DIR) and not os.listdir(OUT_DIR):
 		os.rmdir(OUT_DIR)      # created for this run only
@@ -1326,9 +1390,14 @@ if not confirm_settings(SCRIPT_NAME, experiment_lines(globals().get("_SLIDE") or
 	raise SystemExit
 
 IJ.log("=" * 64)
-IJ.log("Convert to TIFF (single image)")
-IJ.log("  input  : %s" % IN_FILE)
+IJ.log("Convert to TIFF")
+IJ.log("  input  : %s" % IN_DIR)
 IJ.log("  output : %s" % OUT_DIR)
+IJ.log("  format : %s   (%d file(s))" % (USE_FORMAT, len(files)))
+if format_note:
+	IJ.log("  ! %s" % format_note)
+for e, n in skipped_format:
+	IJ.log("  . %d %s file(s) in the folder were left alone" % (n, e))
 if doProject:
 	rng = "all slices" if not (zStart or zStop) else "slices %s-%s" % (
 	    zStart if zStart else "first", zStop if zStop else "last")
@@ -1350,173 +1419,173 @@ IJ.log("=" * 64)
 # ================================================================= RUN
 written, failed, skipped, noted = [], [], [], []
 log_rows = []
-result_paths = []      # outputs of this file (written or already there)
-outputs = []           # (output name, channels it holds) for the record
-fail_msg = None
+outputs = []        # (output name, channels it holds) for the record
 
-IJ.showProgress(0, 1)
-IJ.log("[1/1] %s" % fname)
-
-imp = None
-channels = []
-made_here = []
-notes = []      # things the user should look at
-infos = []      # plain summaries, Log only
-if stem_note:
-	notes.append(stem_note)
-
+# try/finally so the progress bar and status line are reset on every exit.
 try:
-	IJ.showStatus("[1/1] %s - opening" % fname)
-	imp, n_series = bf_open(path, SERIES_INDEX)
-	if n_series > 1:
-		n_pos = file_positions(path)
-		if n_pos:
-			notes.append(positions_text(n_pos))
-		else:
-			infos.append("file has %d series (resolution levels); "
-			             "used series %d" % (n_series, SERIES_INDEX))
+	for i, fname in enumerate(files):
+		stem, stem_note = STEMS[fname]
+		path = os.path.join(IN_DIR, fname)
 
-	nc, nz, nt = imp.getNChannels(), imp.getNSlices(), imp.getNFrames()
-	IJ.log("      opened: %dx%d  %d channel(s), %d z, %d frame(s), %d-bit"
-	       % (imp.getWidth(), imp.getHeight(), nc, nz, nt,
-	          imp.getBitDepth()))
+		IJ.showProgress(i, len(files))
+		IJ.showStatus("[%d/%d] %s" % (i + 1, len(files), fname))
+		IJ.log("[%d/%d] %s" % (i + 1, len(files), fname))
 
-	# ---- z-projection ---------------------------------------------------
-	suffix = ""
-	if doProject:
-		IJ.showStatus("[1/1] %s - projecting" % fname)
-		imp, pnote, pflag = project(imp)
-		if pflag:
-			notes.append(pnote)
-		else:
-			infos.append(pnote)
-		if ADD_PROJECTION_SUFFIX and imp.getNSlices() == 1 and nz > 1:
-			suffix += PROJECTION_SUFFIX.get(projectionType, "_PROJ")
-		nz = imp.getNSlices()
-		nt = imp.getNFrames()
+		imp = None
+		channels = []
+		made_here = []
+		notes = []      # things the user should look at
+		infos = []      # plain summaries, Log only
+		if stem_note:
+			notes.append(stem_note)
 
-	# ---- channels -------------------------------------------------------
-	wanted = WANTED_CHANNELS if WANTED_CHANNELS else range(1, nc + 1)
-	missing = [c for c in wanted if c > nc]
-	if missing:
-		raise StepError(
-		    "channel(s) %s were requested but the image has only %d "
-		    "channel(s).\n      Adjust the channel list, or untick "
-		    "'Save only certain channels'."
-		    % (", ".join([str(c) for c in missing]), nc))
+		try:
+			IJ.showStatus("[%d/%d] %s - opening" % (i + 1, len(files), fname))
+			imp, n_series = bf_open(path, SERIES_INDEX)
+			if n_series > 1:
+				n_pos = file_positions(path)
+				if n_pos:
+					notes.append(positions_text(n_pos))
+				else:
+					infos.append("file has %d series (resolution levels); "
+					             "used series %d" % (n_series, SERIES_INDEX))
 
-	if nc > 1:
-		IJ.showStatus("[1/1] %s - splitting channels" % fname)
-		channels = list(ChannelSplitter.split(imp))
-	else:
-		channels = [imp]
+			nc, nz, nt = imp.getNChannels(), imp.getNSlices(), imp.getNFrames()
+			IJ.log("      opened: %dx%d  %d channel(s), %d z, %d frame(s), %d-bit"
+			       % (imp.getWidth(), imp.getHeight(), nc, nz, nt,
+			          imp.getBitDepth()))
 
-	# ---- write ----------------------------------------------------------
-	IJ.showStatus("[1/1] %s - saving" % fname)
-	# Channel suffix: "full" names follow version 1 (one file per channel
-	# whenever split, or when only one channel is kept); "region" names add
-	# it only when this file gives more than one TIFF. See OUTPUT NAMING in
-	# the configuration block.
-	made = []       # (output name, channels it holds)
-	if STEM_MODE == "full":
-		per_channel = splitChannels or len(wanted) == 1
-	else:
-		per_channel = splitChannels and len(wanted) > 1
-	if per_channel:
-		for c in wanted:
-			out_name = stem + suffix + (CHANNEL_SUFFIX_TEMPLATE % c) \
-			           + OUTPUT_EXTENSION
-			out_path = os.path.join(OUT_DIR, out_name)
-			if os.path.exists(out_path) and not overwrite:
-				skipped.append(out_name)
-				result_paths.append(out_path)
-				notes.append("%s already existed; not overwritten" % out_name)
-				continue
-			save_tif(channels[c - 1], out_path, path)
-			made.append((out_name, [c]))
-			result_paths.append(out_path)
-	else:
-		extra = ""
-		if STEM_MODE == "full" and 1 < len(wanted) < nc:
-			extra = CHANNEL_SUBSET_SUFFIX
-		out_name = stem + suffix + extra + OUTPUT_EXTENSION
-		out_path = os.path.join(OUT_DIR, out_name)
-		if os.path.exists(out_path) and not overwrite:
-			skipped.append(out_name)
-			result_paths.append(out_path)
-			notes.append("%s already existed; not overwritten" % out_name)
-		else:
-			built = False
-			if len(wanted) == 1:
-				combined = channels[wanted[0] - 1]
-			elif list(wanted) == range(1, nc + 1):
-				# All channels in their own order. Any other order
-				# (e.g. "2,1") is rebuilt below, in the order given.
-				combined = imp
+			# ---- z-projection -----------------------------------------------
+			suffix = ""
+			if doProject:
+				IJ.showStatus("[%d/%d] %s - projecting" % (i + 1, len(files), fname))
+				imp, pnote, pflag = project(imp)
+				if pflag:
+					notes.append(pnote)
+				else:
+					infos.append(pnote)
+				if ADD_PROJECTION_SUFFIX and imp.getNSlices() == 1 and nz > 1:
+					suffix += PROJECTION_SUFFIX.get(projectionType, "_PROJ")
+				nz = imp.getNSlices()
+				nt = imp.getNFrames()
+
+			# ---- channels ----------------------------------------------------
+			wanted = WANTED_CHANNELS if WANTED_CHANNELS else range(1, nc + 1)
+			missing = [c for c in wanted if c > nc]
+			if missing:
+				raise StepError(
+				    "channel(s) %s were requested but the image has only %d "
+				    "channel(s).\n      Adjust the channel list, or untick "
+				    "'Save only certain channels'."
+				    % (", ".join([str(c) for c in missing]), nc))
+
+			if nc > 1:
+				IJ.showStatus("[%d/%d] %s - splitting channels"
+				              % (i + 1, len(files), fname))
+				channels = list(ChannelSplitter.split(imp))
 			else:
-				combined = subset_channels(channels, wanted, nz, nt,
-				                           stem + suffix)
-				built = True
-			try:
-				save_tif(combined, out_path, path)
-			finally:
-				if built:
+				channels = [imp]
+
+			# ---- write --------------------------------------------------------
+			# Channel suffix: "full" names follow version 1 (one file per
+			# channel whenever split, or when only one channel is kept);
+			# "region" names add it only when this file gives more than one
+			# TIFF. See OUTPUT NAMING in the configuration block.
+			made = []       # (output name, channels it holds)
+			if STEM_MODE == "full":
+				per_channel = splitChannels or len(wanted) == 1
+			else:
+				per_channel = splitChannels and len(wanted) > 1
+			if per_channel:
+				for c in wanted:
+					out_name = stem + suffix + (CHANNEL_SUFFIX_TEMPLATE % c) \
+					           + OUTPUT_EXTENSION
+					out_path = os.path.join(OUT_DIR, out_name)
+					if os.path.exists(out_path) and not overwrite:
+						skipped.append(out_name)
+						notes.append("%s already existed; not overwritten" % out_name)
+						continue
+					save_tif(channels[c - 1], out_path, path)
+					made.append((out_name, [c]))
+			else:
+				extra = ""
+				if STEM_MODE == "full" and 1 < len(wanted) < nc:
+					extra = CHANNEL_SUBSET_SUFFIX
+				out_name = stem + suffix + extra + OUTPUT_EXTENSION
+				out_path = os.path.join(OUT_DIR, out_name)
+				if os.path.exists(out_path) and not overwrite:
+					skipped.append(out_name)
+					notes.append("%s already existed; not overwritten" % out_name)
+				else:
+					built = False
+					if len(wanted) == 1:
+						combined = channels[wanted[0] - 1]
+					elif list(wanted) == range(1, nc + 1):
+						# All channels in their own order. Any other order
+						# (e.g. "2,1") is rebuilt below, in the order given.
+						combined = imp
+					else:
+						combined = subset_channels(channels, wanted, nz, nt,
+						                           stem + suffix)
+						built = True
 					try:
-						combined.changes = False
-						combined.close()
-					except (Exception, JavaException):
-						pass
-			made.append((out_name, list(wanted)))
-			result_paths.append(out_path)
-	made_here = [nm for nm, _c in made]
-	outputs.extend(made)
+						save_tif(combined, out_path, path)
+					finally:
+						if built:
+							try:
+								combined.changes = False
+								combined.close()
+							except (Exception, JavaException):
+								pass
+					made.append((out_name, list(wanted)))
+			made_here = [nm for nm, _c in made]
+			outputs.extend(made)
 
-	written.extend(made_here)
-	if notes:
-		noted.append(fname)
-	for nm, chans in made:
-		IJ.log("      -> %s  (%s)" % (nm, channel_text(chans)))
-	for inf in infos:
-		IJ.log("      . %s" % inf)
-	for nt_ in notes:
-		IJ.log("      ! %s" % nt_)
-	IJ.log("      OK: %d TIFF(s) written" % len(made_here))
+			written.extend(made_here)
+			if notes:
+				noted.append(fname)
+			for nm, chans in made:
+				IJ.log("      -> %s  (%s)" % (nm, channel_text(chans)))
+			for inf in infos:
+				IJ.log("      . %s" % inf)
+			for nt_ in notes:
+				IJ.log("      ! %s" % nt_)
+			IJ.log("      OK: %d TIFF(s) written" % len(made_here))
 
-	log_rows.append([fname, str(nc), str(nz), str(nt),
-	                 projectionType if doProject else "none",
-	                 " ".join([str(c) for c in wanted]),
-	                 str(len(made_here)),
-	                 "ok" if not (notes or infos)
-	                 else "ok: " + " | ".join(notes + infos)])
+			log_rows.append([fname, str(nc), str(nz), str(nt),
+			                 projectionType if doProject else "none",
+			                 " ".join([str(c) for c in wanted]),
+			                 str(len(made_here)),
+			                 "ok" if not (notes or infos)
+			                 else "ok: " + " | ".join(notes + infos)])
 
-except StepError, e:
-	failed.append(fname)
-	fail_msg = str(e)
-	IJ.log("      FAILED: %s" % str(e))
-	log_rows.append([fname, "", "", "", "", "", "0",
-	                 "FAILED: " + str(e).replace("\n", " ")])
+		except StepError, e:
+			failed.append(fname)
+			IJ.log("      FAILED: %s" % str(e))
+			log_rows.append([fname, "", "", "", "", "", "0",
+			                 "FAILED: " + str(e).replace("\n", " ")])
 
-except (Exception, JavaException), e:
-	failed.append(fname)
-	msg = "%s: %s" % (type(e).__name__, str(e))
-	fail_msg = "unexpected error - " + msg
-	IJ.log("      UNEXPECTED ERROR: %s" % msg)
-	log_rows.append([fname, "", "", "", "", "", "0",
-	                 "UNEXPECTED ERROR: " + msg.replace("\n", " ")])
+		except (Exception, JavaException), e:
+			failed.append(fname)
+			msg = "%s: %s" % (type(e).__name__, str(e))
+			IJ.log("      UNEXPECTED ERROR: %s" % msg)
+			log_rows.append([fname, "", "", "", "", "", "0",
+			                 "UNEXPECTED ERROR: " + msg.replace("\n", " ")])
 
+		finally:
+			for obj in channels:
+				try:
+					obj.changes = False
+					obj.close()
+				except (Exception, JavaException):
+					pass
+			if imp is not None:
+				try:
+					imp.changes = False
+					imp.close()
+				except (Exception, JavaException):
+					pass
 finally:
-	for obj in channels:
-		try:
-			obj.changes = False
-			obj.close()
-		except (Exception, JavaException):
-			pass
-	if imp is not None:
-		try:
-			imp.changes = False
-			imp.close()
-		except (Exception, JavaException):
-			pass
 	IJ.showProgress(1.0)
 	IJ.showStatus("")
 
@@ -1524,7 +1593,7 @@ finally:
 # ------------------------------------------------------------------- log
 log_path = None
 if writeLog:
-	log_path = os.path.join(OUT_DIR, "_conversion_log_%s.csv" % stem)
+	log_path = os.path.join(OUT_DIR, "_conversion_log.csv")
 	if os.path.exists(log_path) and not overwrite:
 		IJ.log("Debug log NOT saved - the file already exists (tick "
 		       "'Overwrite existing output files' to replace it): %s" % log_path)
@@ -1550,9 +1619,10 @@ record_path = None
 if WRITE_PARAMETER_RECORD and OUT_DIR and os.path.isdir(OUT_DIR):
 	items = [
 	    ("#Dialog", "")] + layout_record() + [
-	    ("File type to convert", globals().get("fileType") or ""),
-	    ("Microscope file (.ims, .nd2, ...)", IN_FILE),
-	    ("Output location (blank = beside the folder that holds the input file)",
+	    ("Folder of microscope files (nd2/)", IN_DIR),
+	    ("File type to convert", fileType),
+	    ("Raw data top folder (the tree with the .nd2/.ims files that mirrors the slide folders; blank = in the slide folder)", globals().get("rawRoot") and rawRoot.getAbsolutePath() or "(blank)"),
+	    ("Output location (blank = one level above the input, or inside a slide folder with an MBF folder)",
 	     outParentDir.getAbsolutePath() if outParentDir is not None
 	     else "(blank)"),
 	    ("Name for the new output folder", outFolderName),
@@ -1568,8 +1638,9 @@ if WRITE_PARAMETER_RECORD and OUT_DIR and os.path.isdir(OUT_DIR):
 	    ("Save each channel as its own file", splitChannels),
 	    ("Overwrite existing output files", overwrite),
 	    ("Write a debug log CSV to the output folder", writeLog),
-	    ("Show the result (open the saved TIFFs)", showResult),
 	    ("#Configuration", ""),
+	    ("KNOWN_FORMATS", ", ".join(FORMATS)),
+	    ("Format converted", USE_FORMAT),
 	    ("SERIES_INDEX", SERIES_INDEX),
 	    ("OUTPUT_STEM", OUTPUT_STEM),
 	    ("TIFS_INSIDE_SLIDE_FOLDER", TIFS_INSIDE_SLIDE_FOLDER),
@@ -1585,57 +1656,48 @@ if WRITE_PARAMETER_RECORD and OUT_DIR and os.path.isdir(OUT_DIR):
 	    ("OUTPUT_EXTENSION", OUTPUT_EXTENSION),
 	    ("CONFIRM_BEFORE_RUN", CONFIRM_BEFORE_RUN),
 	    ("#Inputs", ""),
-	    ("file 1", IN_FILE),
-	    ("#Outputs", ""),
 	]
+	for k, fname in enumerate(files):
+		items.append(("file %d" % (k + 1), os.path.join(IN_DIR, fname)))
+	items.append(("#Outputs", ""))
 	for k, (nm, chans) in enumerate(outputs):
 		items.append(("output %d" % (k + 1), "%s  (%s)" % (nm, channel_text(chans))))
-	items += [
-	    ("#Results", ""),
-	    ("TIFFs written", len(written)),
-	    ("Skipped (output existed)", len(skipped)),
-	    ("Failed", ", ".join(failed) if failed else "none"),
-	]
+	items.append(("#Results", ""))
+	items.append(("TIFFs written", len(written)))
+	items.append(("Skipped (output existed)", len(skipped)))
+	items.append(("Failed", ", ".join(failed) if failed else "none"))
 	record_path = write_run_record(OUT_DIR, SCRIPT_NAME, SCRIPT_VERSION, items)
 	if record_path:
 		IJ.log("Parameter record: %s" % record_path)
 
 
-# ------------------------------------------------------------ show result
-if showResult and not failed:
-	for rp in result_paths:
-		try:
-			shown = IJ.openImage(rp)
-		except (Exception, JavaException), e:
-			shown = None
-			IJ.log("WARNING: could not reopen %s: %s" % (rp, str(e)))
-		if shown is None:
-			IJ.log("WARNING: could not reopen %s" % rp)
-			continue
-		shown.show()
-		IJ.log("Opened for inspection: %s" % os.path.basename(rp))
-
-
 # ---------------------------------------------------- completion notice
 IJ.log("-" * 64)
-summary = ["TIFFs written : %d" % len(written)]
+summary = ["Files read    : %d" % len(files),
+           "TIFFs written : %d" % len(written)]
 if skipped:
 	summary.append("Skipped       : %d  (output existed)" % len(skipped))
 if failed:
-	summary.append("FAILED        : %s" % fail_msg)
+	summary.append("Failed        : %d  (see Log)" % len(failed))
 if noted:
-	summary.append("With notes    : see the Log window")
+	summary.append("With notes    : %d  (see Log)" % len(noted))
 for line in summary:
 	IJ.log(line)
 IJ.log("-" * 64)
 
 IJ.beep()
 
-body = [("Could not convert %s." if failed else "Converted %s.") % fname, ""]
+body = ["Converted %d %s file(s)." % (len(files), USE_FORMAT), ""]
 body.extend(summary)
 body.append("")
 body.append("Output folder:")
 body.append("   " + OUT_DIR)
+if format_note:
+	body.append("")
+	body.append("NOTE: " + format_note)
+for e, n in skipped_format:
+	body.append("%d %s file(s) were left alone. To convert those instead, "
+	            "set 'File type to convert' to %s." % (n, e, e))
 if log_path:
 	body.append("")
 	body.append("Log: " + log_path)

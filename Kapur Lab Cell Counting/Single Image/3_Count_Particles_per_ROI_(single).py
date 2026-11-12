@@ -576,6 +576,8 @@ def write_run_record(out_dir, script_name, script_version, items):
 # ---- SHARED: user_checks -- keep identical ----
 def confirm_settings(script_name, lines, enabled):
 	"""Run / Cancel window; True = go ahead. "!" lines: warnings, logged."""
+	if globals().get("_UNATTENDED"):         # Run Stages for an Animal
+		return _UNATTENDED.check(script_name, lines)
 	from ij import IJ
 	warn = ["WARNING: " + ln[1:].strip() for ln in lines if ln.startswith("!")]
 	info = [ln for ln in lines if not ln.startswith("!")]
@@ -905,8 +907,8 @@ def find_tuned(folder, region):
 		d = os.path.dirname(d)
 	tag = re.sub(r"[^A-Za-z0-9]+", "_", region).strip("_")
 	for d in LAYOUT_CSV and [os.path.dirname(LAYOUT_CSV)] or dirs:
-		for s in (tag and "_" + tag, ""):
-			p = os.path.join(d, "tuned_counting_parameters%s.txt" % s)
+		for s in [(f, n) for f in ("counting_tuning", "") for n in (tag and "_" + tag, "")]:
+			p = os.path.join(d, s[0], "tuned_counting_parameters%s.txt" % s[1])
 			if not os.path.isfile(p):
 				continue
 			v = dict([[x.strip() for x in ln.split("=", 1)] for ln in
@@ -1496,6 +1498,8 @@ def layout_pick_region(slide, typed):
 	import os
 	from ij import Prefs
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.pick_region(slide, typed)
 	regions = layout_regions(slide)
 	typed = (typed or "").strip()
 	hits = typed and layout_match_region(regions, typed) or []
@@ -1555,6 +1559,8 @@ def layout_confirm(title, slide, region, fields):
 	import os
 	from ij import IJ
 	from ij.gui import GenericDialog
+	if globals().get("_UNATTENDED"):
+		return _UNATTENDED.confirm(title, slide, region, fields)
 	pick_one = "(choose one)"
 	vals = [f[2] or "" for f in fields]
 	for _try in range(3):
