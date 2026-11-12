@@ -1253,7 +1253,8 @@ def layout_text(x):
 
 def layout_read_csv(path):
 	import csv
-	raw = open(path, "rb").read()
+	with open(path, "rb") as fh:        # closed now: Windows locks open files
+		raw = fh.read()
 	if raw.startswith("\xef\xbb\xbf"):
 		raw = raw[3:]
 	raw = layout_text(raw).encode("utf-8")

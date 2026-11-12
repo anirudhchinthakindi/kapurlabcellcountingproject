@@ -765,7 +765,8 @@ def layout_text(x):
 
 def layout_read_csv(path):
 	import csv
-	raw = open(path, "rb").read()
+	with open(path, "rb") as fh:        # closed now: Windows locks open files
+		raw = fh.read()
 	if raw.startswith("\xef\xbb\xbf"):
 		raw = raw[3:]
 	raw = layout_text(raw).encode("utf-8")
@@ -1487,7 +1488,8 @@ def region_preview(paths):
 	per_file, every = [], []
 	for p in paths:
 		try:
-			txt = open(p).read().decode("latin-1")    # NeuroInfo: ISO-8859-1
+			with open(p) as fh:
+				txt = fh.read().decode("latin-1")    # NeuroInfo: ISO-8859-1
 		except IOError:
 			continue
 		regs = []

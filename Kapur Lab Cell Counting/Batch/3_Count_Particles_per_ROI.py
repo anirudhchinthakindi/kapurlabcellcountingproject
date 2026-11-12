@@ -927,8 +927,9 @@ def find_tuned(folder, region):
 			p = os.path.join(d, s[0], "tuned_counting_parameters%s.txt" % s[1])
 			if not os.path.isfile(p):
 				continue
-			v = dict([[x.strip() for x in ln.split("=", 1)] for ln in
-			          open(p).read().splitlines() if "=" in ln and "#" != ln[:1]])
+			with open(p) as fh:         # closed at once: Tune may replace it later
+				v = dict([[x.strip() for x in ln.split("=", 1)] for ln in
+				          fh.read().splitlines() if "=" in ln and "#" != ln[:1]])
 			r = layout_text(v.get("region", "\0"))
 			if r in (region, "\0"):
 				return p, v, r != region and region and ("! %s records no region "
@@ -1182,7 +1183,8 @@ def layout_text(x):
 
 def layout_read_csv(path):
 	import csv
-	raw = open(path, "rb").read()
+	with open(path, "rb") as fh:        # closed now: Windows locks open files
+		raw = fh.read()
 	if raw.startswith("\xef\xbb\xbf"):
 		raw = raw[3:]
 	raw = layout_text(raw).encode("utf-8")

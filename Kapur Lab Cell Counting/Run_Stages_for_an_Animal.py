@@ -388,7 +388,8 @@ def layout_text(x):
 
 def layout_read_csv(path):
 	import csv
-	raw = open(path, "rb").read()
+	with open(path, "rb") as fh:        # closed now: Windows locks open files
+		raw = fh.read()
 	if raw.startswith("\xef\xbb\xbf"):
 		raw = raw[3:]
 	raw = layout_text(raw).encode("utf-8")
@@ -559,6 +560,22 @@ def b(x):
 	return isinstance(x, unicode) and x.encode("utf-8") or str(x)
 
 
+def read_file(path, mode="r"):
+	"""The file's contents, the file closed at once: on Windows a file that is
+	still open cannot be renamed or removed, by this run or another program."""
+	fh = open(path, mode)
+	try:
+		return fh.read()
+	finally:
+		fh.close()
+
+
+def script_text(path):
+	"""A script's source with Unix line ends (a copy made on Windows may have
+	CR LF)."""
+	return read_file(path, "rb").replace("\r\n", "\n").replace("\r", "\n")
+
+
 # ------------------------------------------------------- stage scripts
 def stage_dir():
 	"""The folder of this suite (it holds Batch/), or None."""
@@ -578,7 +595,7 @@ def stage_dir():
 def parse_fields(path):
 	"""The #@ fields of a script: (var, type, label, default, choices, style)."""
 	out = []
-	for line in open(path).read().split("\n"):
+	for line in script_text(path).split("\n"):
 		m = re.match(r"#@\s*(\w+)\s*\((.*)\)\s*(\w+)\s*$", line)
 		if not m:
 			continue
@@ -683,10 +700,13 @@ def ask_settings(key, name, fields):
 			vals[var] = v
 			Prefs.set("kapurcellcount.animal.%s.%s" % (key, var), pref_text(v))
 	got = typed_values(key, use, vals)
-	shown = [(f[2].strip(), got[f[0]] is None and "(blank)" or isinstance(got[f[0]], File)
-	          and got[f[0]].getAbsolutePath() or got[f[0]] == "" and "(blank)" or got[f[0]])
-	         for f in use]
-	return got, shown
+	return got, [(f[2].strip(), shown_value(got[f[0]])) for f in use]
+
+
+def shown_value(v):
+	"""A setting as the Check settings window and the records show it."""
+	return v is None and "(blank)" or isinstance(v, File) and v.getAbsolutePath() or \
+	    v == "" and "(blank)" or v
 
 
 def choose_project(animal):
@@ -983,7 +1003,7 @@ def verdict(un, seen, err):
 def stage_code(path):
 	"""The stage, compiled with its message windows (IJ.showMessage and
 	IJ.error) handed to the runner, which reports them in its summary."""
-	src = re.sub(r"\bIJ\.(showMessage|error)\(", "_UNATTENDED.message(", open(path).read())
+	src = re.sub(r"\bIJ\.(showMessage|error)\(", "_UNATTENDED.message(", script_text(path))
 	return compile(src, path, "exec")
 
 
@@ -1044,7 +1064,7 @@ def tuned_file(slide, region):
 			for s in (tag and "_" + tag, ""):
 				p = os.path.join(d, sub, "tuned_counting_parameters%s.txt" % s)
 				if os.path.isfile(p):
-					v = dict([[x.strip() for x in ln.split("=", 1)] for ln in open(p).read()
+					v = dict([[x.strip() for x in ln.split("=", 1)] for ln in read_file(p)
 					          .splitlines() if "=" in ln and ln[:1] != "#"])
 					return layout_text(v.get("region", "\0")) in (name, "\0") and p or None
 	return None
@@ -1095,11 +1115,17 @@ def break_window(title, lines, radios=None, project=None, ok="Continue"):
 	              "again later and it offers to continue from this break.")
 	gd.setOKLabel(ok)
 	gd.setCancelLabel("Stop here")
+	IJ.log("-" * 64)
+	IJ.log("Break: %s. The run waits (%s)." % (title, time.strftime("%H:%M")))
 	gd.showDialog()
 	if gd.wasCanceled():
+		IJ.log("  Stop here pressed at %s." % time.strftime("%H:%M"))
 		return None
 	pick = project and gd.getNextChoice() or None
-	return (radios and gd.getNextRadioButton() or None), pick
+	radio = radios and gd.getNextRadioButton() or None
+	IJ.log("  Continued at %s%s." % (time.strftime("%H:%M"), radio and ": " + radio or
+	                                  pick and ": project " + pick or ""))
+	return radio, pick
 
 
 def review_slide(code, slide, typed, raw_root):
@@ -1167,14 +1193,14 @@ def load_state(animal, typed):
 	if not os.path.isfile(p):
 		return None
 	try:
-		info = json.loads(open(p).read())
+		info = json.loads(read_file(p))
 		def back(v):
 			return isinstance(v, dict) and "file" in v and File(v["file"]) or v
 		info["settings"] = dict([(k, (dict([(n, back(x)) for n, x in v.items()]),
 		                              [tuple(y) for y in info.get("shown", {}).get(k, [])]))
 		                         for k, v in info["settings"].items()])
 		info["stages"] = [k for k in info["stages"] if k in info["settings"]]
-		for k in ("broken", "done"):
+		for k in ("broken", "done", "tables", "used"):
 			info[k] = dict(info.get(k) or {})
 		info["reviewed"] = list(info.get("reviewed") or [])
 		return info["stages"] and info or None
@@ -1195,7 +1221,7 @@ def forget_state(animal, typed):
 # ------------------------------------------------------------- outputs
 def read_table(path):
 	import csv
-	raw = open(path, "rb").read()
+	raw = read_file(path, "rb")
 	if raw.startswith("\xef\xbb\xbf"):
 		raw = raw[3:]
 	first = raw.split("\n")[0]
@@ -1228,8 +1254,11 @@ def animal_tables(animal, plan, tag):
 		rois = "channel_means" in cols and cols[cols.index("channel_means") + 1:] or []
 		path = os.path.join(animal, "%s_all_slides_%s.csv" % (name, tag))
 		if os.path.exists(path):
+			keep, n = "%s_previous_%s" % (path[:-4], time.strftime("%Y%m%d-%H%M%S")), 1
+			while os.path.exists(keep + (n > 1 and "_%d" % n or "") + ".csv"):
+				n += 1
 			try:
-				os.rename(path, "%s_previous_%s.csv" % (path[:-4], time.strftime("%Y%m%d-%H%M%S")))
+				os.rename(path, keep + (n > 1 and "_%d" % n or "") + ".csv")
 			except OSError:
 				IJ.log("  ! the earlier %s could not be renamed; it is replaced" % path)
 		fh = open(path, "w")
@@ -1265,11 +1294,13 @@ def show_summary(title, lines):
 
 
 # --------------------------------------------------------------- the run
-def plan_slides(slides, typed, chosen, settings, raw_root, project, broken, done):
+def plan_slides(slides, typed, chosen, settings, raw_root, project, paused):
 	"""Per slide: its region folder and the stages that can run on it (an
-	input made by an earlier stage of this run counts as there). Of a paused
-	run being continued: broken {slide: why}, done {slide: [stages]}."""
+	input made by an earlier stage of this run counts as there). paused: the
+	paused run being continued ({} for a new run): broken {slide: why}, done
+	{slide: [stages]}, and stage 3's tables and settings used {slide: ...}."""
 	keys, plan = [s[0] for s in chosen], []
+	broken, done = paused.get("broken", {}), paused.get("done", {})
 	for slide in slides:
 		r = {"slide": slide, "name": os.path.basename(slide), "region": None, "todo": [],
 		     "stages": {}, "excluded": "", "broken": broken.get(os.path.basename(slide), "")}
@@ -1283,7 +1314,9 @@ def plan_slides(slides, typed, chosen, settings, raw_root, project, broken, done
 		r["region"], made = region, set()
 		for key, script, name, reads, outf in chosen:
 			if key in done.get(r["name"], []):
-				r["stages"][key] = ("done before the pause", "", "", [], [])
+				r["stages"][key] = ("done before the pause", "", key == "3" and paused.get(
+				    "used", {}).get(r["name"]) or "", [], key == "3" and list(paused.get(
+				    "tables", {}).get(r["name"]) or []) or [])
 				made.add(MAKES[key])
 				continue
 			miss = r["broken"] or key != "1" and region is None and why or missing_input(
@@ -1321,7 +1354,8 @@ def check_lines(animal, typed, raw_animal, chosen, settings, project, plan, resu
 	for r in plan:
 		if r["excluded"]:
 			continue
-		skipped = [s[0] for s in chosen if s[0] in r["stages"]]
+		skipped = [s[0] for s in chosen if r["stages"].get(s[0], ("done before the pause",))[0]
+		           != "done before the pause"]
 		if skipped:
 			warn.append("!%s: %s" % (r["name"], outcomes(r, skipped)))
 		if r["todo"] and r["region"]:
@@ -1344,8 +1378,14 @@ def check_lines(animal, typed, raw_animal, chosen, settings, project, plan, resu
 			warn.append("!%s writes to '%s/', but the later stages read '%s/'." % (name, v, MAKES[key]))
 	excl = [r["name"] for r in plan if r["excluded"]]
 	if resumed:
-		out.append("Continuing the run paused on %s (at the break: %s), with its settings."
-		           % (resumed.get("time"), resumed.get("break")))
+		out.append("Continuing the run paused on %s (at the break: %s%s), with its settings."
+		           % (resumed.get("time"), resumed.get("break"), resumed.get("error") and
+		              "; it ended there with an error: %s" % resumed["error"] or ""))
+		before = [(r["name"], [k for k in keys if r["stages"].get(k, ("",))[0] ==
+		                       "done before the pause"]) for r in plan]
+		if [x for x in before if x[1]]:
+			out.append("Done before the pause (not run again): %s" % "; ".join(
+			    ["%s: %s" % (n, ", ".join(ks)) for n, ks in before if ks]))
 	out += ["Animal folder: %s" % animal,
 	        "Region: %s" % (typed or "(blank: each slide's only region folder)")]
 	if "1" in settings:
@@ -1359,9 +1399,9 @@ def check_lines(animal, typed, raw_animal, chosen, settings, project, plan, resu
 		           "every slide)" % project))
 	bks = ("2a" in keys and "2b" in keys or resumed and resumed.get("break") == "review ROIs") and [
 	    "before 2b, to review the ROIs (optional)"] or []
-	bks += "2c" in keys and ("2b" in keys or project != OWN_PROJECT) and [
-	    "before 2c, to train ilastik%s" % ("2b" not in keys and " (only if no trained project is "
-	                                       "found in the animal folder)" or "")] or []
+	bks += "2c" in keys and ("2b" in keys or project == ANIMAL_PROJECT) and [
+	    "before 2c, to train ilastik%s" % ("2b" not in keys and " (only if the animal folder "
+	                                       "does not hold exactly one trained project)" or "")] or []
 	bks += (
 	    "3" in keys and settings["3"][0].get("settingsSource", "").startswith("Tuned") and [
 	        "before 3, to tune the counting parameters (only if no tuned values are found)"] or [])
@@ -1468,6 +1508,7 @@ def review_break(ctx, slides):
 	todo = [r for r in slides if r["name"] not in ctx["reviewed"]]
 	if not todo:
 		return "go"
+	save_pause(ctx, BREAK_NAMES["2b"])       # saved now: closing Fiji at the break keeps the run
 	got = break_window("review ROIs", [
 	    "2a has run (%d slide(s) ready for 2b). 2b clears everything outside the ROIs, so correct"
 	    % len(slides), "any ROI outlines now, before 2b runs.", "",
@@ -1480,11 +1521,12 @@ def review_break(ctx, slides):
 	if got[0] != REVIEW_NOW:
 		return "go"
 	path = os.path.join(ctx["kdir"], "Batch", "2a.i_Review_and_Edit_ROIs.py")
-	code = compile(open(path).read(), path, "exec")
+	code = compile(script_text(path), path, "exec")
 	for i, r in enumerate(todo):
 		if i:
 			nxt = "Review %s" % r["name"]
-			got = break_window("review ROIs", ["2a.i was opened on: %s." % ", ".join(ctx["reviewed"]),
+			got = break_window("review ROIs", ["2a.i was opened on: %s." % (", ".join(ctx["reviewed"])
+			                                                                   or "none yet"),
 			                                   "Next: %s (%d of %d)." % (r["name"], i + 1, len(todo))],
 			                   [nxt, "Done reviewing: go on with 2b"], ok="OK")
 			if got is None:
@@ -1497,6 +1539,7 @@ def review_break(ctx, slides):
 			IJ.log("  2a.i on %s did not open: %s" % (r["name"], why))
 		else:
 			ctx["reviewed"].append(r["name"])
+			save_pause(ctx, BREAK_NAMES["2b"])
 	return "go"
 
 
@@ -1534,6 +1577,7 @@ def ilastik_break(ctx, slides):
 		    "ilastik." or "3. Save the project in the animal folder, then close ilastik:",
 		    mode != OWN_PROJECT and "      %s" % animal or "", ""] + status
 		shown = len(ilps) > 1 and [os.path.basename(p) for p, t in ilps] or None
+		save_pause(ctx, BREAK_NAMES["2c"])
 		got = break_window("train ilastik", lines, project=shown)
 		if got is None:
 			return "stop"
@@ -1591,6 +1635,7 @@ def tune_break(ctx, slides):
 		lines += ["", "To tune now: run Plugins > Kapur Lab Cell Counting > Tune Counting "
 		          "Parameters (this window", "can stay open). Close Tune's windows before you press "
 		          "Continue: windows that are", "open while stage 3 runs are closed."]
+		save_pause(ctx, BREAK_NAMES["3"])
 		got = break_window("tune counting parameters", lines,
 		                   problem and ["Check again for tuned values", use_start] or None)
 		if got is None:
@@ -1603,34 +1648,41 @@ def tune_break(ctx, slides):
 
 
 def before_phase(first, ctx, slides):
+	"""The break before a part, if it applies: "go" or "stop". The run is saved
+	first, as paused before this part (a break saves its own name when its
+	window opens), so closing Fiji or a crash keeps it."""
 	if not slides:
 		return "go"
 	ctx["watch"].listen = False
 	if first in BREAK_NAMES:
-		save_pause(ctx, BREAK_NAMES[first])        # kept if Fiji is closed at the break
-	if first == "2b" and ("2a" in ctx["keys"] or (ctx["resumed"] or {}).get("break") == BREAK_NAMES["2b"]):
-		return review_break(ctx, slides)
-	if first == "2c":
-		return ilastik_break(ctx, slides)
-	if first == "3" and ctx["settings"]["3"][0].get("settingsSource", "").startswith("Tuned"):
-		return tune_break(ctx, slides)
-	return "go"
+		save_pause(ctx, "before %s" % ctx["names"][first])
+	brk = first == "2b" and ("2a" in ctx["keys"] or (ctx["resumed"] or {}).get(
+	    "break") == BREAK_NAMES["2b"]) and review_break or first == "2c" and ilastik_break or \
+	    first == "3" and ctx["settings"]["3"][0].get("settingsSource", "").startswith(
+	        "Tuned") and tune_break or None
+	return brk and brk(ctx, slides) or "go"
 
 
 BREAK_NAMES = {"2b": "review ROIs", "2c": "train ilastik", "3": "tune counting parameters"}
 
 
 def save_pause(ctx, why):
-	"""Save the run as paused here, with the stages left (ctx["left"])."""
-	done = {}
+	"""Save the run as paused here (why: the break, or "before <stage>"), with
+	the stages left (ctx["left"]); for the slides, the stages done and stage
+	3's tables and settings used; the ilastik project 2c uses, once chosen."""
+	done, tables = {}, {}
 	for r in ctx["plan"]:
 		ks = [k for k in ctx["keys"] if r["stages"].get(k, ("",))[0].startswith("done")]
 		if ks:
 			done[r["name"]] = ks
-	save_state(ctx["animal"], ctx["typed"], {
+		if "3" in ks:
+			tables[r["name"]] = list(r["stages"]["3"][4])
+	ctx["at"] = why
+	ctx["unsaved"] = not save_state(ctx["animal"], ctx["typed"], {
 	    "time": time.strftime("%Y-%m-%d %H:%M"), "region": ctx["typed"], "break": why,
-	    "raw_root": ctx["raw_root"], "stages": ctx["left"], "project": ctx["project"],
-	    "slides": ctx["together"], "reviewed": ctx["reviewed"], "done": done,
+	    "error": ctx.get("error", ""), "raw_root": ctx["raw_root"], "stages": ctx["left"],
+	    "project": ctx["project"], "ilp": ctx.get("ilp") or "", "slides": ctx["together"],
+	    "reviewed": ctx["reviewed"], "done": done, "tables": tables, "used": ctx["used"],
 	    "settings": dict([(k, ctx["settings"][k]) for k in ctx["left"]]),
 	    "broken": dict([(r["name"], r["broken"]) for r in ctx["plan"] if r["broken"]])})
 
@@ -1646,7 +1698,7 @@ def run_phase(phase, ctx):
 			continue
 		if ctx["esc"] or ctx["fatal"]:
 			for key in keys:
-				r["stages"][key] = ("not run", ctx["esc"] and "the run was stopped with Esc" or
+				r["stages"][key] = ("not run yet", ctx["esc"] and "the run was stopped with Esc" or
 				                    "the run ended: " + ctx["fatal"], "", [], [])
 			continue
 		IJ.log("-" * 64)
@@ -1654,10 +1706,14 @@ def run_phase(phase, ctx):
 		made = set()
 		for key in keys:
 			wide = ctx["wide"].get(key)
-			if ctx["esc"] or ctx["fatal"] or r["broken"] or wide:
-				r["stages"][key] = ("not run", ctx["esc"] and "the run was stopped with Esc" or
-				                    ctx["fatal"] and "the run ended: " + ctx["fatal"] or r["broken"]
-				                    or "it stopped on %s for the same reason" % wide[0], "", [], [])
+			stop = ctx["esc"] and "the run was stopped with Esc" or ctx["fatal"] and \
+			    "the run ended: " + ctx["fatal"]
+			if stop and not (r["broken"] or wide):          # continued later
+				r["stages"][key] = ("not run yet", stop, "", [], [])
+				continue
+			if r["broken"] or wide:
+				r["stages"][key] = ("not run", r["broken"] or "it stopped on %s for the same "
+				                    "reason" % wide[0], "", [], [])
 				if wide and not r["broken"]:
 					r["broken"] = "%s did not finish on this slide" % names[key]
 				continue
@@ -1674,6 +1730,12 @@ def run_phase(phase, ctx):
 			res, err = run_stage(ctx["codes"][key], key, r["slide"], ctx["typed"],
 			                     ctx["settings"][key][0], ctx["raw_root"],
 			                     ctx.get("ilp") or ctx["project"], watch)
+			if key == "3" and res[0].startswith("done") and "2c" in ctx["keys"] and \
+			        not r["stages"].get("2c", ("",))[0].startswith("done"):
+				w = ("2c made no maps on this slide in this run, so stage 3 counted the maps "
+				     "that were already in probabilities/")
+				res = ("done, with warnings", res[1] and res[1] + "; " + w or w, res[2],
+				       res[3] + [w], res[4])
 			r["stages"][key] = res
 			IJ.log("  %s: %s%s" % (names[key], res[0], res[1] and " - " + res[1] or ""))
 			add_note(record_files(dirs) - before, ctx["note"])
@@ -1717,7 +1779,7 @@ def main():
 	kdir = stage_dir()
 	if not kdir:
 		IJ.error(SCRIPT_NAME, "The stage scripts (the Batch folder) were not found. Keep this "
-		         "script in the Kapur Lab Cell Counting folder in Fiji.app/scripts/Plugins/, "
+		         "script in the Kapur Lab Cell Counting folder in Fiji's scripts/Plugins/ folder, "
 		         "next to Batch/, and restart Fiji.")
 		return
 	animal = os.path.normpath(animalDir.getAbsolutePath())
@@ -1753,8 +1815,11 @@ def main():
 			return
 		if resumed:                    # the paused run's settings; defaults for new fields
 			use = [f for f in parse_fields(path) if f[0] not in GIVEN and f[0] not in FIXED.get(key, {})]
-			vals, shown = typed_values(key, use, {}), resumed["settings"][key][1]
-			vals.update(resumed["settings"][key][0])
+			saved = resumed["settings"][key][0]
+			vals, shown = typed_values(key, use, {}), list(resumed["settings"][key][1])
+			shown += [(f[2].strip() + " (new since the pause: its default)", shown_value(vals[f[0]]))
+			          for f in use if f[0] not in saved]
+			vals.update(saved)
 			settings[key] = (vals, shown)
 			continue
 		got = ask_settings(key, name, parse_fields(path))
@@ -1771,10 +1836,14 @@ def main():
 		           "composites on screen, so nothing would be made.")
 	project = ""
 	if "2c" in settings:
-		project = resumed and resumed.get("project") or choose_project(animal)
+		# continuing: the project 2c used before the pause, once chosen
+		project = resumed and (resumed.get("ilp") or resumed.get("project")) or choose_project(animal)
 		if project is None:
 			return
-		if project not in (ANIMAL_PROJECT, OWN_PROJECT) and not stored_classifier(project):
+		if project not in (ANIMAL_PROJECT, OWN_PROJECT) and not os.path.isfile(project):
+			bad.append("2c: %s\nwas not found. The paused run used it for 2c: put it back, or "
+			           "start a new run." % project)
+		elif project not in (ANIMAL_PROJECT, OWN_PROJECT) and not stored_classifier(project):
 			bad.append("2c: %s\nholds no trained classifier. Open it in ilastik, turn on Live "
 			           "Update, wait until the predictions appear, save it, and run this "
 			           "again." % project)
@@ -1796,8 +1865,7 @@ def main():
 		         "files. Choose the folder of ONE animal: its subfolders are its slides."
 		         % (animal, raw_animal and "\nor in\n%s" % raw_animal or ""))
 		return
-	plan = plan_slides(slides, typed, chosen, settings, raw_root, project,
-	                   resumed and resumed["broken"] or {}, resumed and resumed["done"] or {})
+	plan = plan_slides(slides, typed, chosen, settings, raw_root, project, resumed or {})
 	runs = [r for r in plan if r["todo"]]
 	lines = check_lines(animal, typed, raw_animal, chosen, settings, project, plan, resumed)
 	if not runs:
@@ -1816,7 +1884,8 @@ def main():
 	       "runs": runs, "plan": plan, "together": together, "resumed": resumed,
 	       "reviewed": resumed and resumed["reviewed"] or [],
 	       "names": dict([(s[0], s[2]) for s in STAGES]), "esc": False, "fatal": "",
-	       "wide": {}, "last_stop": {}, "used": {}, "paused": "", "left": [],
+	       "wide": {}, "last_stop": {}, "used": dict(resumed and resumed.get("used") or {}),
+	       "paused": "", "left": [],
 	       "codes": dict([(s[0], stage_code(os.path.join(kdir, "Batch", s[1]))) for s in chosen])}
 	ctx["note"] = ("\n\n[Run Stages for an Animal]\nThis stage ran on every slide of the animal, "
 	               "with the same settings for all of them.\nanimal folder = %s\nslides of this "
@@ -1840,27 +1909,33 @@ def main():
 					act = before_phase(phase[0], ctx, ready)
 				except (ANY_ERROR, Throwable), e:
 					IJ.log("ERROR at the break: %s" % e)
-					act, why = "stop", "an error at the break (%s)" % e
-				else:
-					why = BREAK_NAMES.get(phase[0], "")
+					act, ctx["error"] = "stop", u"%s" % e
 				if act == "stop":
-					ctx["paused"] = why
-					IJ.log("Paused at the break: %s" % why)
+					ctx["paused"] = ctx.get("at") or "before %s" % ctx["names"][phase[0]]
+					IJ.log("Paused at the break: %s" % ctx["paused"])
 					break
 				ctx["left"] = []
 			run_phase(phase, ctx)
-			if (ctx["esc"] or ctx["fatal"]) and not ctx["left"]:
-				ctx["left"] = [k for p in phases[i:] for k in p]
+			if ctx["esc"] or ctx["fatal"]:
+				ctx["left"] = ctx["left"] or [k for p in phases[i:] for k in p]
+				break
 	finally:
 		watch.alive = False
 		Toolkit.getDefaultToolkit().removeAWTEventListener(esc_keys)
-	for r in runs:
-		if [k for k in r["todo"] if r["stages"].get(k, ("not run",))[0] != "not run"]:
-			slide_record(r, ctx)
-	for r in runs:            # stages after the break: not run yet
-		for k in ctx["paused"] and ctx["left"] or []:
+	for r in runs:            # stages the run did not reach
+		for k in ctx["left"]:
 			if k in r["todo"] and k not in r["stages"]:
-				r["stages"][k] = ("not run yet", "paused at the break", "", [], [])
+				r["stages"][k] = ("not run yet", ctx["paused"] and "paused at the break" or
+				                  ctx["esc"] and "the run was stopped with Esc" or
+				                  "the run ended after an error", "", [], [])
+	# left: the stages some slide still has to do (none: the run is complete)
+	ctx["left"] = [k for k in ctx["left"] if [r for r in runs if k in r["todo"] and not r["broken"]
+	               and not r["stages"].get(k, ("",))[0].startswith("done")]]
+	if ctx["esc"] and not ctx["left"]:
+		IJ.log("Esc was pressed, but every stage had finished on every slide.")
+	for r in runs:
+		if [k for k in r["todo"] if not r["stages"].get(k, ("not run",))[0].startswith("not run")]:
+			slide_record(r, ctx)
 	if ctx["left"]:
 		save_pause(ctx, ctx["paused"] or (ctx["esc"] and "stopped with Esc") or
 		           "stopped after an error")
@@ -1881,7 +1956,7 @@ def report(ctx, plan):
 		             "the slide folder" and regions[0] or len(regions) > 1 and "several regions"
 		             or "slides")
 		try:
-			tables = animal_tables(animal, runs, tag.strip("_") or "slides")
+			tables = animal_tables(animal, plan, tag.strip("_") or "slides")
 		except ANY_ERROR, e:
 			notes.append("The combined tables could not be written: %s" % e)
 	srcs = {}
@@ -1902,16 +1977,19 @@ def report(ctx, plan):
 	if carried:
 		notes.append("Not continued, as a stage did not finish on them before the pause: %s."
 		             % ", ".join(carried))
+	if ctx.get("error"):
+		notes.append("The break ended with an error: %s" % ctx["error"])
 	if ctx["fatal"]:
 		notes.append("The run ended after %s.%s" % (ctx["fatal"], "OutOfMemory" in ctx["fatal"]
 		             and " Give Fiji more memory (Edit > Options > Memory & Threads), restart "
 		             "it and run again." or ""))
 	ran = [r for r in runs if [k for k in r["todo"] if not r["stages"].get(
 	    k, ("not run",))[0].startswith("not run")]]
-	not_done = [r for r in runs if [k for k in r["stages"] if r["stages"][k][0] not in (
-	    "done", "not run yet", "done before the pause")]] + carried
-	title = (ctx["esc"] or ctx["fatal"]) and "Animal run STOPPED" or ctx["paused"] and \
-	    "Animal run paused (break: %s)" % ctx["paused"] or (not_done or [
+	not_done = [r for r in plan if not r["excluded"] and [k for k in r["stages"] if r["stages"][
+	    k][0] not in ("done", "not run yet", "done before the pause")]]
+	title = (ctx["esc"] or ctx["fatal"]) and ctx["left"] and "Animal run STOPPED" or \
+	    ctx["paused"] and ctx["left"] and "Animal run paused%s (break: %s)" % (
+	        ctx.get("error") and " after an error" or "", ctx["paused"]) or (not_done or [
 	        x for x in notes if not x.startswith("ilastik project used")]) and \
 	    "Animal run complete - with problems" or "Animal run complete"
 	body = ["Animal: %s" % animal, "Region: %s" % (ctx["typed"] or "(blank)"),
@@ -1928,10 +2006,12 @@ def report(ctx, plan):
 	body += ["", "Each slide's record of this run: _run_%s_<time>.txt in its region folder."
 	         % SCRIPT_NAME]
 	if ctx["left"]:
-		body.append("%s Stages left: %s. To continue, run this script on this animal again and "
-		            "choose 'Continue the paused run'." % (ctx["paused"] and "Paused at the break: "
-		            "%s." % ctx["paused"] or ctx["esc"] and "Stopped with Esc." or
-		            "Stopped after an error.", ", ".join(ctx["left"])))
+		body.append("%s Stages left: %s. %s" % (ctx["paused"] and "Paused at the break: %s." %
+		            ctx["paused"] or ctx["esc"] and "Stopped with Esc." or "Stopped after an error.",
+		            ", ".join(ctx["left"]), ctx.get("unsaved") and "The paused run could not be "
+		            "saved (see the Log), so it cannot be continued: run the stages left as a new "
+		            "run." or "To continue, run this script on this animal again and choose "
+		            "'Continue the paused run'."))
 	IJ.log("=" * 64)
 	IJ.log(title)
 	for x in body:

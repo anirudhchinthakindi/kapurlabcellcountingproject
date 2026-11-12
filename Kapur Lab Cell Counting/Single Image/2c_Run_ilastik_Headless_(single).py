@@ -75,6 +75,8 @@ OUTPUT_NAME = "{nickname}.tif"         # {nickname} = input name without .tif
 # program is inside the .app (Contents/MacOS/ilastik).
 ILASTIK_SEARCH = ["C:/Program Files/ilastik-*/ilastik.exe",
                   "D:/Program Files/ilastik-*/ilastik.exe",
+                  "~/AppData/Local/Programs/ilastik-*/ilastik.exe",
+                  "C:/ilastik-*/ilastik.exe",
                   "/Applications/ilastik-*.app",
                   "~/Applications/ilastik-*.app",
                   "~/ilastik-*/run_ilastik.sh",
@@ -500,7 +502,8 @@ def layout_text(x):
 
 def layout_read_csv(path):
 	import csv
-	raw = open(path, "rb").read()
+	with open(path, "rb") as fh:        # closed now: Windows locks open files
+		raw = fh.read()
 	if raw.startswith("\xef\xbb\xbf"):
 		raw = raw[3:]
 	raw = layout_text(raw).encode("utf-8")
@@ -1056,6 +1059,12 @@ def main():
 		lines.append("! %d image path(s) contain '%s' (e.g. %s); ilastik may read it as a "
 		             "list of files and fail. Rename the folder or file."
 		             % (len(odd), os.pathsep, odd[0]))
+	longest = max([len(x) for x in todo + [output_for(i, out_dir) for i in todo] + [project]])
+	if os.sep == "\\" and longest >= 250:      # Windows
+		lines.append("! A path ilastik gets is %d characters long. On Windows, ilastik "
+		             "cannot open paths of 260 characters or more unless long paths are "
+		             "turned on in Windows; keep the experiment folder near the top of the "
+		             "drive (for example D:\\Data\\<experiment>)." % longest)
 	if len(project_choices) > 1:
 		lines.append("! %d .ilp projects were found; check that this is the one "
 		             "trained for this region." % len(project_choices))

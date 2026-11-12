@@ -1,0 +1,9 @@
+# Keep the scripts and test scripts with Unix line ends, also when Git for
+# Windows checks them out (core.autocrlf). Fiji reads either, but its
+# 100,000-character limit counts the extra CR characters.
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.docx binary
+*.tif binary
+*.ilp binary

@@ -1,10 +1,9 @@
 # 2a_NeuroInfo_XML_to_ROI_(single).py - Kapur Lab Cell Counting, stage 2a
-# (single image). Converts ONE NeuroInfo contour export (xml/, micrometres)
-# into an ImageJ RoiSet .zip in pixel coordinates in rois/ beside xml/, as
-# the batch version does (same checks, composition and output), plus a
-# parameter record; optionally shows it on its image. The Log lists every
-# ROI with its pixel bounds (a quick Y axis check). Keep the USER
-# CONFIGURATION block identical to the batch version's.
+# (single image): ONE NeuroInfo contour export (xml/, micrometres) to an
+# ImageJ RoiSet .zip in pixels in rois/, with the batch version's checks,
+# composition and output, and a parameter record; optionally shown on its
+# image. The Log lists each ROI's pixel bounds (a Y axis check). Keep the
+# USER CONFIGURATION block identical to the batch version's.
 # Menu: Plugins > Kapur Lab Cell Counting > Single image.
 
 #@ File    (label="Slide folder (the scripts find its subfolders)", style="directory") slideDir
@@ -957,7 +956,8 @@ def layout_text(x):
 
 def layout_read_csv(path):
 	import csv
-	raw = open(path, "rb").read()
+	with open(path, "rb") as fh:        # closed now: Windows locks open files
+		raw = fh.read()
 	if raw.startswith("\xef\xbb\xbf"):
 		raw = raw[3:]
 	raw = layout_text(raw).encode("utf-8")
@@ -1689,7 +1689,8 @@ def region_preview(paths):
 	per_file, every = [], []
 	for p in paths:
 		try:
-			txt = open(p).read().decode("latin-1")    # NeuroInfo: ISO-8859-1
+			with open(p) as fh:
+				txt = fh.read().decode("latin-1")    # NeuroInfo: ISO-8859-1
 		except IOError:
 			continue
 		regs = []

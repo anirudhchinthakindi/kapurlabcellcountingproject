@@ -25,21 +25,45 @@ is where to look up what a field means or why a message appeared.
 ## Installing
 
 1. Install Fiji from https://imagej.net/software/fiji/downloads. Unzip it to a
-   folder you can write to (on Windows, not inside Program Files).
-2. Quit Fiji. Copy the whole `Kapur Lab Cell Counting` folder into
-   `Fiji.app/scripts/Plugins/`. Make sure it did not end up inside a second
-   folder of the same name.
+   folder you can write to (on Windows, not inside Program Files; for example
+   `C:\Users\<you>\Fiji`). The unzipped folder is called `Fiji` (`Fiji.app`
+   in older downloads).
+2. Quit Fiji. Copy the whole `Kapur Lab Cell Counting` folder into Fiji's
+   `scripts/Plugins/` folder (`Fiji\scripts\Plugins\` on Windows). Make sure
+   it did not end up inside a second folder of the same name.
 3. Start Fiji. The scripts are under Plugins > Kapur Lab Cell Counting:
    the four tools, then the submenus Batch and Single Image.
 4. For stage 2c and for training, install ilastik from https://www.ilastik.org.
    Use one ilastik version for a whole experiment.
 
 To update, quit Fiji, delete the old `Kapur Lab Cell Counting` folder in
-`Fiji.app/scripts/Plugins/`, and copy in the new one. Copying over the old
+`scripts/Plugins/`, and copy in the new one. Copying over the old
 folder leaves renamed scripts behind, and the menu then shows both versions.
 
-The scripts are tested with ImageJ 1.54f and the Bio-Formats that comes with
-Fiji.
+The scripts are tested outside the Fiji app, with a stand-in for ilastik: on
+Linux with ImageJ 1.54f and Bio-Formats 7.3.0, and with the jars of the
+current Fiji download (ImageJ 1.54p, Bio-Formats 8.5.0, Jython 2.7.4); and
+under Wine, which behaves like Windows, with that download's own Windows
+Java. They have not been run on a Windows PC.
+
+## On Windows
+
+- 2c finds ilastik by itself when it is installed in
+  `C:\Program Files\ilastik-<version>\` (also on D:, in your user's
+  `AppData\Local\Programs`, or as `C:\ilastik-<version>`). Elsewhere, fill
+  in "ilastik program" with the path of `ilastik.exe`.
+- Windows locks a file that is open in Excel. Close a results table or
+  `experiment_layout.csv` there before a script writes it; a script that
+  finds one locked says so.
+- Keep the experiment folder near the top of a drive (for example
+  `D:\Data\<experiment>`). ilastik cannot open paths of 260 characters or
+  more unless long paths are turned on in Windows, and 2c warns when a path
+  is that long.
+- The scripts were not tested with network paths of the form
+  `\\server\share\...`. If the data is on a server, map the share to a
+  drive letter and choose the folders through that letter.
+- If you get the scripts with Git, the repository's `.gitattributes` keeps
+  their Unix line ends. Scripts with Windows line ends (CR LF) work too.
 
 ## The stages
 
@@ -129,14 +153,16 @@ Slides of different animals are never run together.
   tuned values and none exist yet. The window stays open while you work.
   Press Continue when the step is done, or Stop here to finish another day:
   the next run on that animal and region offers to continue with the same
-  settings, and slides that finished a stage do not repeat it.
+  settings and the same ilastik project, and slides that finished a stage do
+  not repeat it.
 - If a stage fails on a slide, the later stages skip that slide and the other
   slides carry on. Esc stops the run once the stage that is running has
   finished.
 - Each slide's region folder gets a record saying it was run as part of the
   whole animal. After stage 3, the animal folder also gets
   `particle_counts_all_slides_<region>.csv`, which lists the slides' tables
-  one after the other.
+  one after the other (in a continued run, also those of the slides counted
+  before the pause).
 
 A first pass on a new animal goes:
 
@@ -170,5 +196,9 @@ and then continue each animal's run.
 Each script is a single file, so nothing else needs installing. Helper code
 that several scripts use is pasted into each of them and must stay identical
 in every copy. Fiji cannot open a script of 100,000 characters or more, so
-each script is kept under 95,000. The scripts are Jython 2.7 (Python 2
-syntax) and pure ASCII. Appendix A of the script reference has the details.
+each script is kept under 95,000, which leaves room for Windows line ends.
+The scripts are Jython 2.7 (Python 2 syntax) and pure ASCII. A file a script
+reads is closed at once (with `with`, or read and closed in a helper): Jython
+closes files only when it collects them, and on Windows an open file cannot
+be renamed or removed. `tests/run_all.sh` runs the test suites; Appendix A
+of the script reference has the details.
